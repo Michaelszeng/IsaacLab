@@ -98,6 +98,7 @@ import time
 import gymnasium as gym
 import torch
 
+import omni.kit.app
 import omni.ui as ui
 
 from isaaclab.devices import Se3Keyboard, Se3KeyboardCfg, Se3SpaceMouse, Se3SpaceMouseCfg
@@ -308,6 +309,49 @@ def setup_teleop_device(callbacks: dict[str, Callable]) -> object:
     return teleop_interface
 
 
+def setup_wrist_camera_window(env: gym.Env, wrist_prim: str = "/World/envs/env_0/Robot/panda_hand") -> None:
+    """Create a floating viewport window that follows the robot's wrist camera.
+
+    The window renders a second viewport locked to a camera placed at the wrist.
+    If the robot prim doesn't exist yet or the viewport API is unavailable the
+    function exits silently so it never blocks the main loop.
+
+    Args:
+        env: The environment instance (used only to check sim is running).
+        wrist_prim: USD prim path for the wrist link that the camera will track.
+    """
+    try:
+        import omni.kit.viewport.utility as vp_utils
+        import omni.usd
+        from pxr import Gf, Usd, UsdGeom
+
+        stage = omni.usd.get_context().get_stage()
+        if stage is None:
+            return
+
+        cam_path = wrist_prim + "/WristCam"
+
+        # Create the camera prim if it doesn't exist.
+        if not stage.GetPrimAtPath(cam_path).IsValid():
+            cam_prim = UsdGeom.Camera.Define(stage, cam_path)
+            cam_prim.GetClippingRangeAttr().Set(Gf.Vec2f(0.01, 10.0))
+            cam_prim.GetHorizontalApertureAttr().Set(20.955)
+            cam_prim.GetFocalLengthAttr().Set(24.0)
+            # Orient so the camera looks forward (down the wrist Z-axis).
+            xform = UsdGeom.Xformable(cam_prim.GetPrim())
+            xform.ClearXformOpOrder()
+            xform.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, 0.12))
+            # 180° around Y: correct forward direction.  +90° around Z: 90° CW image.
+            xform.AddRotateXYZOp().Set(Gf.Vec3f(0.0, 180.0, 90.0))
+
+        # Open a new viewport window pointing at the wrist camera.
+        viewport = vp_utils.create_viewport_window("Wrist Camera", width=400, height=300)
+        if viewport is not None:
+            viewport.viewport_api.set_active_camera(cam_path)
+    except Exception as e:
+        print(f"[WristCam] Could not create wrist camera window: {e}")
+
+
 def setup_ui(label_text: str, env: gym.Env) -> InstructionDisplay:
     """Set up the user interface elements.
 
@@ -328,6 +372,8 @@ def setup_ui(label_text: str, env: gym.Env) -> InstructionDisplay:
             demo_label = ui.Label(label_text)
             subtask_label = ui.Label("")
             instruction_display.set_labels(subtask_label, demo_label)
+
+        setup_wrist_camera_window(env)
 
     return instruction_display
 
@@ -368,18 +414,26 @@ def process_success_condition(env: gym.Env, success_term: object | None, success
 
 
 def handle_reset(
-    env: gym.Env, success_step_count: int, instruction_display: InstructionDisplay, label_text: str
+    env: gym.Env,
+    success_step_count: int,
+    instruction_display: InstructionDisplay,
+    label_text: str,
+    teleop_interface: object | None = None,
 ) -> int:
     """Handle resetting the environment.
 
     Resets the environment, recorder manager, and related state variables.
-    Updates the instruction display with current status.
+    Updates the instruction display with current status.  Also resets the
+    teleop device's internal state so that, e.g., the spacemouse's persistent
+    gripper-toggle flag doesn't immediately re-close the gripper.
 
     Args:
         env: The environment instance to reset
         success_step_count: Current count of consecutive successful steps
         instruction_display: The display object to update
         label_text: Text to display showing current recording status
+        teleop_interface: Teleop device whose internal state should be cleared
+            so the gripper command returns to "open" after reset.
 
     Returns:
         int: Reset success step count (0)
@@ -388,6 +442,8 @@ def handle_reset(
     env.sim.reset()
     env.recorder_manager.reset()
     env.reset()
+    if teleop_interface is not None and hasattr(teleop_interface, "reset"):
+        teleop_interface.reset()
     success_step_count = 0
     instruction_display.show_demo(label_text)
     return success_step_count
@@ -419,6 +475,66 @@ def run_simulation_loop(
     should_reset_recording_instance = False
     running_recording_instance = not args_cli.xr
 
+    # ---------------------------------------------------------------------------
+    # Pre-set camera views.  Press V to cycle through them.
+    # Each entry is (eye_xyz, lookat_xyz).
+    # ---------------------------------------------------------------------------
+    _PRESET_VIEWS = [
+        # 1: front close-up — near-head-on, slightly above workspace
+        ((1.429, -0.082, 0.76), (0.158, -0.091, 0.206)),
+        # 2: low rear-left — looking forward/up toward the workspace
+        ((0.232, -0.279, 0.001), (1.367, 0.769, 0.466)),
+    ]
+    _current_view_idx = [0]  # mutable container so the closure can update it
+
+    def cycle_camera_view():
+        _current_view_idx[0] = (_current_view_idx[0] + 1) % len(_PRESET_VIEWS)
+        eye, lookat = _PRESET_VIEWS[_current_view_idx[0]]
+        env.sim.set_camera_view(eye, lookat)
+        print(f"[View] preset {_current_view_idx[0]}: eye={eye}", flush=True)
+
+    def print_camera_view():
+        """Print the current viewport camera eye/lookat so it can be saved as a preset.
+
+        Drag/orbit the viewport with the mouse to position the camera, then press
+        ``P`` to print a tuple ready to paste into ``_PRESET_VIEWS`` above.
+        """
+        try:
+            from omni.kit.viewport.utility import get_active_viewport
+            from omni.kit.viewport.utility.camera_state import ViewportCameraState
+        except ImportError as e:
+            print(f"[View] viewport utility unavailable: {e}", flush=True)
+            return
+
+        viewport_api = get_active_viewport()
+        if viewport_api is None:
+            print("[View] No active viewport available.", flush=True)
+            return
+
+        try:
+            cam_state = ViewportCameraState(viewport_api.camera_path, viewport_api)
+            eye_vec = cam_state.position_world
+            target_vec = cam_state.target_world
+        except Exception as e:
+            print(f"[View] Could not query camera state: {e}", flush=True)
+            return
+
+        eye = (round(float(eye_vec[0]), 3), round(float(eye_vec[1]), 3), round(float(eye_vec[2]), 3))
+        lookat = (round(float(target_vec[0]), 3), round(float(target_vec[1]), 3), round(float(target_vec[2]), 3))
+        print(
+            f"[View] current camera -> eye={eye}, lookat={lookat}\n       preset entry: ({eye}, {lookat}),",
+            flush=True,
+        )
+
+    def mark_success_and_advance():
+        """Mark the current episode as successful, export it, then reset."""
+        nonlocal should_reset_recording_instance
+        env.recorder_manager.record_pre_reset([0], force_export_or_skip=False)
+        env.recorder_manager.set_success_to_episodes([0], torch.tensor([[True]], dtype=torch.bool, device=env.device))
+        env.recorder_manager.export_episodes([0])
+        print("Demo manually marked as SUCCESS — saving and advancing.", flush=True)
+        should_reset_recording_instance = True
+
     # Callback closures for the teleop device
     def reset_recording_instance():
         nonlocal should_reset_recording_instance
@@ -445,6 +561,13 @@ def run_simulation_loop(
 
     teleop_interface = setup_teleop_device(teleoperation_callbacks)
     teleop_interface.add_callback("R", reset_recording_instance)
+
+    # Keyboard listener for 'r' → env reset (works alongside spacemouse).
+    keyboard_interface = Se3Keyboard(Se3KeyboardCfg())
+    keyboard_interface.add_callback("R", reset_recording_instance)
+    keyboard_interface.add_callback("V", cycle_camera_view)
+    keyboard_interface.add_callback("P", print_camera_view)
+    keyboard_interface.add_callback("N", mark_success_and_advance)
 
     # Reset before starting
     env.sim.reset()
@@ -501,7 +624,9 @@ def run_simulation_loop(
 
             # Handle reset if requested
             if should_reset_recording_instance:
-                success_step_count = handle_reset(env, success_step_count, instruction_display, label_text)
+                success_step_count = handle_reset(
+                    env, success_step_count, instruction_display, label_text, teleop_interface
+                )
                 should_reset_recording_instance = False
 
             # Check if simulation is stopped

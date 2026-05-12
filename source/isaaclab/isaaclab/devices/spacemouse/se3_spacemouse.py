@@ -52,6 +52,7 @@ class Se3SpaceMouse(DeviceBase):
         # store inputs
         self.pos_sensitivity = cfg.pos_sensitivity
         self.rot_sensitivity = cfg.rot_sensitivity
+        self.deadzone = cfg.deadzone
         self.gripper_term = cfg.gripper_term
         self._sim_device = cfg.sim_device
         # acquire device interface
@@ -64,6 +65,7 @@ class Se3SpaceMouse(DeviceBase):
         self._close_gripper = False
         self._delta_pos = np.zeros(3)  # (x, y, z)
         self._delta_rot = np.zeros(3)  # (roll, pitch, yaw)
+        self._slow_mode = False
         # dictionary for additional callbacks
         self._additional_callbacks = dict()
         # run a thread for listening to device updates
@@ -81,7 +83,7 @@ class Se3SpaceMouse(DeviceBase):
         msg += f"\tManufacturer: {self._device.get_manufacturer_string()}\n"
         msg += f"\tProduct: {self._device.get_product_string()}\n"
         msg += "\t----------------------------------------------\n"
-        msg += "\tRight button: reset command\n"
+        msg += "\tRight button: toggle slow mode (0.1x speed)\n"
         msg += "\tLeft button: toggle gripper command (open/close)\n"
         msg += "\tMove mouse laterally: move arm horizontally in x-y plane\n"
         msg += "\tMove mouse vertically: move arm vertically\n"
@@ -116,8 +118,21 @@ class Se3SpaceMouse(DeviceBase):
                 - delta pose: First 6 elements as [x, y, z, rx, ry, rz] in meters and radians.
                 - gripper command: Last element as a binary value (+1.0 for open, -1.0 for close).
         """
-        rot_vec = Rotation.from_euler("XYZ", self._delta_rot).as_rotvec()
-        command = np.concatenate([self._delta_pos, rot_vec])
+        # Apply per-axis deadzone on the raw (pre-sensitivity) scale.
+        # The stored values are already sensitivity-scaled, so scale the
+        # deadzone threshold accordingly to match the reference impl (deadzone=0.06
+        # applied to the normalized [-1, 1] output of the HID device).
+        pos_dz = self.deadzone * self.pos_sensitivity
+        rot_dz = self.deadzone * self.rot_sensitivity
+        delta_pos = np.where(np.abs(self._delta_pos) > pos_dz, self._delta_pos, 0.0)
+        delta_rot = np.where(np.abs(self._delta_rot) > rot_dz, self._delta_rot, 0.0)
+
+        if self._slow_mode:
+            delta_pos = delta_pos * 0.2
+            delta_rot = delta_rot * 0.2
+
+        rot_vec = Rotation.from_euler("XYZ", delta_rot).as_rotvec()
+        command = np.concatenate([delta_pos, rot_vec])
         if self.gripper_term:
             gripper_value = -1.0 if self._close_gripper else 1.0
             command = np.append(command, gripper_value)
@@ -158,16 +173,20 @@ class Se3SpaceMouse(DeviceBase):
 
     def _run_device(self):
         """Listener thread that keeps pulling new messages."""
+        # Devices that pack translation + rotation into a single 13-byte report (report ID 1).
+        # The SpaceMouse Wireless (cabled) uses the same combined format as the Universal Receiver.
+        _COMBINED_FORMAT_DEVICES = {"3Dconnexion Universal Receiver", "SpaceMouse Wireless"}
+
         # keep running
         while True:
             # read the device data
-            if self._device_name == "3Dconnexion Universal Receiver":
+            if self._device_name in _COMBINED_FORMAT_DEVICES:
                 data = self._device.read(7 + 6)
             else:
                 data = self._device.read(7)
             if data is not None:
                 # readings from 6-DoF sensor
-                if self._device_name == "3Dconnexion Universal Receiver":
+                if self._device_name in _COMBINED_FORMAT_DEVICES:
                     if data[0] == 1:
                         self._delta_pos[1] = self.pos_sensitivity * convert_buffer(data[1], data[2])
                         self._delta_pos[0] = self.pos_sensitivity * convert_buffer(data[3], data[4])
@@ -194,13 +213,10 @@ class Se3SpaceMouse(DeviceBase):
                         # additional callbacks
                         if "L" in self._additional_callbacks:
                             self._additional_callbacks["L"]()
-                    # right button is for reset
+                    # right button toggles slow mode
                     if data[1] == 2:
-                        # reset layer
-                        self.reset()
-                        # additional callbacks
-                        if "R" in self._additional_callbacks:
-                            self._additional_callbacks["R"]()
+                        self._slow_mode = not self._slow_mode
+                        print(f"[SpaceMouse] Slow mode {'ON (0.1x)' if self._slow_mode else 'OFF'}")
                     if data[1] == 3:
                         self._read_rotation = not self._read_rotation
 
@@ -211,6 +227,10 @@ class Se3SpaceMouseCfg(DeviceCfg):
 
     gripper_term: bool = True
     pos_sensitivity: float = 0.4
-    rot_sensitivity: float = 0.8
+    rot_sensitivity: float = 1.6
+    # Deadzone on the normalized [-1, 1] HID scale. Values below this threshold
+    # are zeroed out to prevent noise (e.g., idle offset of ~0.003) from causing
+    # persistent rotation drift. Matches the reference impl's deadzone=0.06.
+    deadzone: float = 0.05
     retargeters: None = None
     class_type: type[DeviceBase] = Se3SpaceMouse

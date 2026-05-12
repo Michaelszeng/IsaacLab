@@ -149,6 +149,48 @@ gym.register(
     disable_env_checker=True,
 )
 ##
+# Franka: Peg-in-Hole Insertion - IK Relative Pose Control
+##
+gym.register(
+    id="Isaac-Insertion-Franka-IK-Rel-Mimic-v0",
+    entry_point=f"{__name__}.insertion_ik_rel_mimic_env:FrankaInsertionIKRelMimicEnv",
+    kwargs={
+        "env_cfg_entry_point": (
+            f"{__name__}.insertion_ik_rel_mimic_env_cfg:FrankaInsertionIKRelMimicEnvCfg"
+        ),
+    },
+    disable_env_checker=True,
+)
+
+##
+# Franka: Peg-in-Hole Insertion - Operational Space Control (recommended for teleop)
+##
+gym.register(
+    id="Isaac-Insertion-Franka-OSC-Mimic-v0",
+    entry_point=f"{__name__}.insertion_ik_rel_mimic_env:FrankaInsertionIKRelMimicEnv",
+    kwargs={
+        "env_cfg_entry_point": (
+            f"{__name__}.insertion_osc_mimic_env_cfg:FrankaInsertionOSCMimicEnvCfg"
+        ),
+    },
+    disable_env_checker=True,
+)
+
+##
+# Franka: Gear Mesh Assembly - IK Relative Pose Control
+##
+gym.register(
+    id="Isaac-GearAssembly-Franka-IK-Rel-Mimic-v0",
+    entry_point=f"{__name__}.gear_assembly_mimic_env:FrankaGearAssemblyIKRelMimicEnv",
+    kwargs={
+        "env_cfg_entry_point": (
+            f"{__name__}.gear_assembly_mimic_env_cfg:FrankaGearAssemblyIKRelMimicEnvCfg"
+        ),
+    },
+    disable_env_checker=True,
+)
+
+##
 # Agibot Right Arm: Place Toy2Box: RmpFlow - Relative Pose Control
 ##
 gym.register(

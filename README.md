@@ -1,5 +1,78 @@
 ![Isaac Lab](docs/source/_static/isaaclab.jpg)
 
+# Michael's Notes
+
+## Installation
+
+```bash
+pip install PyQt5
+```
+
+## Data collection pipeline
+
+Step 1 — Record ~10 source demos (SpaceMouse):
+
+```bash
+python scripts/tools/record_demos.py \
+  --task Isaac-Insertion-Franka-IK-Rel-Mimic-v0 \
+  --teleop_device spacemouse \
+  --dataset_file ./datasets/insertion_source.hdf5 \
+  --enable-cameras \
+  --num_demos 10
+
+python scripts/tools/record_demos.py \
+  --task Isaac-GearAssembly-Franka-IK-Rel-Mimic-v0 \
+  --teleop_device spacemouse \
+  --dataset_file ./datasets/gear_assembly_source.hdf5 \
+  --enable-cameras \
+  --num_demos 10
+```
+
+Visualize data utility:
+
+```bash
+python scripts/tools/visualize_dataset.py ./datasets/insertion_source.hdf5
+
+python scripts/tools/visualize_dataset.py ./datasets/gear_assembly_source.hdf5
+```
+    
+Step 2 — Annotate subtask boundaries:
+
+```bash
+python scripts/imitation_learning/isaaclab_mimic/annotate_demos.py \
+  --task Isaac-Insertion-Franka-IK-Rel-Mimic-v0 \
+  --input_file ./datasets/insertion_source.hdf5 \
+  --output_file ./datasets/insertion_annotated.hdf5 \
+  --auto
+
+python scripts/imitation_learning/isaaclab_mimic/annotate_demos.py \
+  --task Isaac-GearAssembly-Franka-IK-Rel-Mimic-v0 \
+  --input_file ./datasets/gear_assembly_source.hdf5 \
+  --output_file ./datasets/gear_assembly_source_annotated.hdf5 \
+  --auto
+```
+
+`--auto` uses the peg_grasped signal to find the grasp→insert boundary automatically.
+
+Step 3 — Generate augmented dataset:
+
+```bash
+python scripts/imitation_learning/isaaclab_mimic/generate_dataset.py \
+  --task Isaac-Insertion-Franka-IK-Rel-Mimic-v0 \
+  --input_file ./datasets/insertion_annotated.hdf5 \
+  --output_file ./datasets/insertion_generated.hdf5 \
+  --generation_num_trials 200 \
+  --num_envs 16
+
+python scripts/imitation_learning/isaaclab_mimic/generate_dataset.py \
+  --task Isaac-GearAssembly-Franka-IK-Rel-Mimic-v0 \
+  --input_file ./datasets/gear_assembly_annotated.hdf5 \
+  --output_file ./datasets/gear_assembly_generated.hdf5 \
+  --generation_num_trials 200 \
+  --num_envs 16
+```
+
+
 ---
 
 # Isaac Lab
