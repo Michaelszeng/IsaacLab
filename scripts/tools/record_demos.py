@@ -9,6 +9,8 @@ This script allows users to record demonstrations operated by human teleoperatio
 The recorded demonstrations are stored as episodes in a hdf5 file. Users can specify the task, teleoperation
 device, dataset directory, and environment stepping rate through command-line arguments.
 
+NOTE: this script appends to the output file rather than overwriting it.
+
 required arguments:
     --task                    Name of the task.
 
@@ -17,7 +19,9 @@ optional arguments:
     --teleop_device           Device for interacting with environment. (default: keyboard)
     --dataset_file            File path to export recorded demos. (default: "./datasets/dataset.hdf5")
     --step_hz                 Environment stepping rate in Hz. (default: 30)
-    --num_demos               Number of demonstrations to record. (default: 0)
+    --num_demos               Target *total* number of successful demonstrations in the dataset
+                              file (existing demos in the file count toward this target since the
+                              script appends). Set to 0 to record indefinitely. (default: 0)
     --num_success_steps       Number of continuous steps with task success for concluding a demo as successful.
                               (default: 10)
 """
@@ -49,7 +53,14 @@ parser.add_argument(
 )
 parser.add_argument("--step_hz", type=int, default=30, help="Environment stepping rate in Hz.")
 parser.add_argument(
-    "--num_demos", type=int, default=0, help="Number of demonstrations to record. Set to 0 for infinite."
+    "--num_demos",
+    type=int,
+    default=0,
+    help=(
+        "Target *total* number of successful demonstrations in the dataset file. Because this script"
+        " appends to --dataset_file, demos already present in the file count toward this target;"
+        " only (num_demos - existing) new demos will be recorded this run. Set to 0 for infinite."
+    ),
 )
 parser.add_argument(
     "--num_success_steps",
@@ -157,6 +168,31 @@ class RateLimiter:
         if self.last_time < time.time():
             while self.last_time < time.time():
                 self.last_time += self.sleep_duration
+
+
+def count_existing_demos(dataset_file: str) -> int:
+    """Return the number of demos already stored in ``dataset_file``.
+
+    The dataset file is expected to follow the HDF5 layout written by
+    :class:`~isaaclab.utils.datasets.HDF5DatasetFileHandler`, where each
+    successful demo lives under ``/data/demo_<idx>``. Returns 0 if the file
+    doesn't exist, is unreadable, or has no demos.
+    """
+    if not os.path.isfile(dataset_file):
+        return 0
+    try:
+        import h5py
+
+        with h5py.File(dataset_file, "r") as f:
+            if "data" not in f:
+                return 0
+            data_group = f["data"]
+            if not isinstance(data_group, h5py.Group):
+                return 0
+            return sum(1 for k in data_group.keys() if k.startswith("demo_"))
+    except Exception as e:
+        logger.warning(f"Could not read existing demo count from '{dataset_file}': {e}")
+        return 0
 
 
 def setup_output_directories() -> tuple[str, str]:
@@ -454,6 +490,7 @@ def run_simulation_loop(
     teleop_interface: object | None,
     success_term: object | None,
     rate_limiter: RateLimiter | None,
+    existing_demo_count: int = 0,
 ) -> int:
     """Run the main simulation loop for collecting demonstrations.
 
@@ -466,9 +503,12 @@ def run_simulation_loop(
         teleop_interface: Optional teleop interface (will be created if None)
         success_term: The success termination object or None if not available
         rate_limiter: Optional rate limiter to control simulation speed
+        existing_demo_count: Number of successful demos already present in the
+            dataset file at the start of this run. Used so that ``--num_demos``
+            is interpreted as a *total* target (existing + new).
 
     Returns:
-        int: Number of successful demonstrations recorded
+        int: Number of successful demonstrations recorded in this run.
     """
     current_recorded_demo_count = 0
     success_step_count = 0
@@ -569,12 +609,37 @@ def run_simulation_loop(
     keyboard_interface.add_callback("P", print_camera_view)
     keyboard_interface.add_callback("N", mark_success_and_advance)
 
+    print(
+        "\n"
+        "─" * 52 + "\n"
+        " Keyboard shortcuts\n"
+        "─" * 52 + "\n"
+        "  R        Reset / discard current episode\n"
+        "  N        Mark current episode as SUCCESS and save\n"
+        "  V        Cycle through preset camera views\n"
+        "  P        Print current camera position (for presets)\n"
+        "  Ctrl+C   Quit\n"
+        "─" * 52 + "\n"
+    )
+
     # Reset before starting
     env.sim.reset()
     env.reset()
     teleop_interface.reset()
 
-    label_text = f"Recorded {current_recorded_demo_count} successful demonstrations."
+    def _format_label(session_count: int) -> str:
+        total = existing_demo_count + session_count
+        if args_cli.num_demos > 0:
+            return (
+                f"Recorded {total}/{args_cli.num_demos} total demonstrations"
+                f" ({session_count} this session, {existing_demo_count} pre-existing)."
+            )
+        return (
+            f"Recorded {total} total demonstrations"
+            f" ({session_count} this session, {existing_demo_count} pre-existing)."
+        )
+
+    label_text = _format_label(current_recorded_demo_count)
     instruction_display = setup_ui(label_text, env)
 
     subtasks = {}
@@ -606,12 +671,14 @@ def run_simulation_loop(
             # Update demo count if it has changed
             if env.recorder_manager.exported_successful_episode_count > current_recorded_demo_count:
                 current_recorded_demo_count = env.recorder_manager.exported_successful_episode_count
-                label_text = f"Recorded {current_recorded_demo_count} successful demonstrations."
+                label_text = _format_label(current_recorded_demo_count)
                 print(label_text)
 
-            # Check if we've reached the desired number of demos
-            if args_cli.num_demos > 0 and env.recorder_manager.exported_successful_episode_count >= args_cli.num_demos:
-                label_text = f"All {current_recorded_demo_count} demonstrations recorded.\nExiting the app."
+            # Check if we've reached the desired total number of demos
+            # (pre-existing demos in the file count toward --num_demos).
+            total_demo_count = existing_demo_count + env.recorder_manager.exported_successful_episode_count
+            if args_cli.num_demos > 0 and total_demo_count >= args_cli.num_demos:
+                label_text = f"All {total_demo_count} demonstrations recorded.\nExiting the app."
                 instruction_display.show_demo(label_text)
                 print(label_text)
                 target_time = time.time() + 0.8
@@ -666,6 +733,19 @@ def main() -> None:
     # Set up output directories
     output_dir, output_file_name = setup_output_directories()
 
+    # --num_demos is interpreted as the desired *total* number of demos in
+    # the dataset file. Count what's already there so we record only the
+    # remainder this session (and exit immediately if the target is met).
+    existing_demo_count = count_existing_demos(args_cli.dataset_file)
+    if existing_demo_count > 0:
+        print(f"Dataset '{args_cli.dataset_file}' already contains {existing_demo_count} demos.")
+    if args_cli.num_demos > 0 and existing_demo_count >= args_cli.num_demos:
+        print(
+            f"Target of {args_cli.num_demos} total demonstrations already reached"
+            f" ({existing_demo_count} present). Nothing to record."
+        )
+        return
+
     # Create and configure environment
     global env_cfg  # Make env_cfg available to setup_teleop_device
     env_cfg, success_term = create_environment_config(output_dir, output_file_name)
@@ -674,11 +754,17 @@ def main() -> None:
     env = create_environment(env_cfg)
 
     # Run simulation loop
-    current_recorded_demo_count = run_simulation_loop(env, None, success_term, rate_limiter)
+    current_recorded_demo_count = run_simulation_loop(
+        env, None, success_term, rate_limiter, existing_demo_count=existing_demo_count
+    )
 
     # Clean up
     env.close()
-    print(f"Recording session completed with {current_recorded_demo_count} successful demonstrations")
+    total_demo_count = existing_demo_count + current_recorded_demo_count
+    print(
+        f"Recording session completed with {current_recorded_demo_count} new successful demonstrations"
+        f" ({total_demo_count} total in dataset)."
+    )
     print(f"Demonstrations saved to: {args_cli.dataset_file}")
 
 

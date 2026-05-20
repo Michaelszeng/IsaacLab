@@ -39,7 +39,12 @@ class HDF5DatasetFileHandler(DatasetFileHandlerBase):
         self._demo_count = len(self._hdf5_data_group)
 
     def create(self, file_path: str, env_name: str = None):
-        """Create a new dataset file."""
+        """Create a new dataset file, or open an existing one for appending.
+
+        If a file already exists at ``file_path`` it is opened in append mode
+        so that new episodes are added after the existing ones rather than
+        overwriting the file.
+        """
         if self._hdf5_file_stream is not None:
             raise RuntimeError("HDF5 dataset file stream is already in use")
         if not file_path.endswith(".hdf5"):
@@ -47,18 +52,41 @@ class HDF5DatasetFileHandler(DatasetFileHandlerBase):
         dir_path = os.path.dirname(file_path)
         if not os.path.isdir(dir_path):
             os.makedirs(dir_path)
-        self._hdf5_file_stream = h5py.File(file_path, "w")
 
-        # set up a data group in the file
-        self._hdf5_data_group = self._hdf5_file_stream.create_group("data")
-        self._hdf5_data_group.attrs["total"] = 0
-        self._demo_count = 0
+        if os.path.isfile(file_path):
+            # Append to the existing file instead of truncating it.
+            self._hdf5_file_stream = h5py.File(file_path, "a")
+            self._hdf5_data_group = self._hdf5_file_stream["data"]
 
-        # set environment arguments
-        # the environment type (we use gym environment type) is set to be compatible with robomimic
-        # Ref: https://github.com/ARISE-Initiative/robomimic/blob/master/robomimic/envs/env_base.py#L15
-        env_name = env_name if env_name is not None else ""
-        self.add_env_args({"env_name": env_name, "type": 2})
+            # Restore env_args so add_env_args() merges correctly.
+            if "env_args" in self._hdf5_data_group.attrs:
+                self._env_args = json.loads(self._hdf5_data_group.attrs["env_args"])
+
+            # Set _demo_count past the highest existing demo index so that
+            # write_episode() generates non-colliding names (demo_N, demo_N+1, …).
+            existing_indices = [
+                int(k.split("_", 1)[1])
+                for k in self._hdf5_data_group.keys()
+                if k.startswith("demo_") and k.split("_", 1)[1].isdigit()
+            ]
+            self._demo_count = max(existing_indices) + 1 if existing_indices else 0
+            print(
+                f"Appending to existing dataset '{file_path}' "
+                f"({len(existing_indices)} existing demos, starting at demo_{self._demo_count})."
+            )
+        else:
+            self._hdf5_file_stream = h5py.File(file_path, "w")
+
+            # set up a data group in the file
+            self._hdf5_data_group = self._hdf5_file_stream.create_group("data")
+            self._hdf5_data_group.attrs["total"] = 0
+            self._demo_count = 0
+
+            # set environment arguments
+            # the environment type (we use gym environment type) is set to be compatible with robomimic
+            # Ref: https://github.com/ARISE-Initiative/robomimic/blob/master/robomimic/envs/env_base.py#L15
+            env_name = env_name if env_name is not None else ""
+            self.add_env_args({"env_name": env_name, "type": 2})
 
     def __del__(self):
         """Destructor for the file handler."""

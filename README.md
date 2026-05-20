@@ -43,16 +43,61 @@ python scripts/imitation_learning/isaaclab_mimic/annotate_demos.py \
   --task Isaac-Insertion-Franka-IK-Rel-Mimic-v0 \
   --input_file ./datasets/insertion_source.hdf5 \
   --output_file ./datasets/insertion_annotated.hdf5 \
-  --auto
+  --auto \
+  --enable_cameras \
+  --headless
 
 python scripts/imitation_learning/isaaclab_mimic/annotate_demos.py \
   --task Isaac-GearAssembly-Franka-IK-Rel-Mimic-v0 \
   --input_file ./datasets/gear_assembly_source.hdf5 \
-  --output_file ./datasets/gear_assembly_source_annotated.hdf5 \
-  --auto
+  --output_file ./datasets/gear_assembly_annotated.hdf5 \
+  --auto \
+  --enable_cameras \
+  --headless
 ```
 
 `--auto` uses the peg_grasped signal to find the grasp→insert boundary automatically.
+
+Inspect the auto-generated boundaries using:
+
+```bash
+python scripts/tools/inspect_annotations.py ./datasets/insertion_source.hdf5
+
+python scripts/tools/inspect_annotations.py ./datasets/gear_assembly_annotated.hdf5
+```
+
+Filter out bad episodes using:
+
+```bash
+python scripts/tools/filter_demos.py \
+    ./datasets/insertion_source_annotated.hdf5 \
+    ./datasets/insertion_source_clean.hdf5 \
+    --drop-no-signal \
+    --drop-boundary-outside 10 85 \
+    --dry-run
+
+python scripts/tools/filter_demos.py \
+    ./datasets/gear_assembly_annotated.hdf5 \
+    ./datasets/gear_assembly_clean.hdf5 \
+    --drop-no-signal \
+    --drop-boundary-outside 25 65 \
+    --dry-run
+```
+
+Or, filter out a specific episode using (where `N` is zero-indexed): 
+
+```bash
+python scripts/tools/filter_demos.py \
+  ./datasets/insertion_source_annotated.hdf5 \
+  ./datasets/insertion_source_clean.hdf5 \
+  --drop demo_N
+
+python scripts/tools/filter_demos.py \
+  ./datasets/gear_assembly_annotated.hdf5 \
+  ./datasets/gear_assembly_clean.hdf5 \
+  --drop demo_N
+```
+
 
 Step 3 — Generate augmented dataset:
 
