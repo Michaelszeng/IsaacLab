@@ -286,7 +286,7 @@ class AppLauncher:
             help="Force enable livestreaming. Mapping corresponds to that for the `LIVESTREAM` environment variable.",
         )
         arg_group.add_argument(
-            "--enable-cameras",
+            "--enable_cameras",
             action="store_true",
             default=AppLauncher._APPLAUNCHER_CFG_INFO["enable_cameras"][1],
             help="Enable camera sensors and relevant extension dependencies.",
