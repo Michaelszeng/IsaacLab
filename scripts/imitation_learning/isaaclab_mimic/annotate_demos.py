@@ -40,6 +40,35 @@ parser.add_argument(
     default=False,
     help="Enable annotating start points of subtasks.",
 )
+parser.add_argument(
+    "--grasp_action_bounds",
+    type=float,
+    nargs=2,
+    default=None,
+    metavar=("MIN_PCT", "MAX_PCT"),
+    help=(
+        "Optional inclusive bounds on the action index at which the grasp annotation may be placed,"
+        " expressed as percentages (0-100) of the episode's action count. Specify two floats"
+        " MIN_PCT MAX_PCT. In --auto mode, only the slice of the recorded grasp signal lying within"
+        " [MIN_PCT, MAX_PCT] is consulted: values outside the window are ignored, and the grasp"
+        " annotation is placed at the first False→True transition observed inside the window."
+        " This rejects both later false positives (e.g. during insertion when the object shifts in"
+        " the gripper) and earlier false positives that left the signal stuck True at the start of"
+        " the window (since no in-window transition is observable). In manual mode, episodes whose"
+        " manually marked grasp action index lies outside these bounds are rejected. In both modes,"
+        " episodes with no valid in-window grasp are not exported."
+    ),
+)
+parser.add_argument(
+    "--grasp_subtask_signal",
+    type=str,
+    default=None,
+    help=(
+        "Name of the subtask termination signal that identifies the grasp event for bounds checking."
+        " If omitted, the first subtask termination signal of the first end-effector is used."
+        " Only relevant when --grasp_action_bounds is provided."
+    ),
+)
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -169,6 +198,107 @@ class MimicRecorderManagerCfg(ActionStateRecorderManagerCfg):
     record_pre_step_subtask_term_signals = PreStepSubtaskTermsObservationsRecorderCfg()
 
 
+def _flatten_signal_to_bool_tensor(signal_value) -> torch.Tensor | None:
+    """Flatten a recorded subtask signal into a 1D boolean tensor.
+
+    The annotated episode stores subtask signals either as a list of per-step tensors (auto mode, one
+    entry per env-step) or as a list containing a single full-length tensor (manual mode). This helper
+    normalizes both representations into a 1D bool tensor of length ``num_steps``.
+    """
+    if signal_value is None:
+        return None
+    if isinstance(signal_value, list):
+        if len(signal_value) == 0:
+            return None
+        if len(signal_value) == 1 and signal_value[0].dim() == 1:
+            tensor = signal_value[0]
+        else:
+            tensor = torch.cat([t.reshape(-1) for t in signal_value])
+    else:
+        tensor = signal_value.reshape(-1)
+    return tensor.to(torch.bool)
+
+
+def _find_grasp_action_index(annotated_episode: EpisodeData, signal_name: str) -> int | None:
+    """Find the first action index at which the named subtask termination signal becomes True."""
+    subtask_term_signals = annotated_episode.data.get("obs", {}).get("datagen_info", {}).get("subtask_term_signals", {})
+    if signal_name not in subtask_term_signals:
+        return None
+    flags = _flatten_signal_to_bool_tensor(subtask_term_signals[signal_name])
+    if flags is None or flags.numel() == 0:
+        return None
+    nonzero = flags.nonzero(as_tuple=False)
+    if nonzero.numel() == 0:
+        return None
+    return int(nonzero[0].item())
+
+
+def _find_grasp_action_index_in_range(
+    annotated_episode: EpisodeData,
+    signal_name: str,
+    min_index: int,
+    max_index: int,
+) -> int | None:
+    """Find the action index of the first False→True transition of the grasp signal inside ``[min_index, max_index]``.
+
+    Only the flags within ``[min_index, max_index]`` are inspected; values outside the window do not
+    influence the search at all. Specifically, the function returns the smallest ``k`` such that
+    ``min_index < k <= max_index`` and ``flags[k - 1] == False`` and ``flags[k] == True``, with both
+    ``k`` and ``k - 1`` lying within the window.
+
+    Returning a transition (rather than the earliest True in the window) rules out the "stuck-True"
+    case where the signal flipped earlier in the episode (e.g. an early false positive) and continues
+    to read True throughout the window; in that case no in-window F→T edge exists and the function
+    returns ``None`` so the caller rejects the episode.
+    """
+    subtask_term_signals = annotated_episode.data.get("obs", {}).get("datagen_info", {}).get("subtask_term_signals", {})
+    if signal_name not in subtask_term_signals:
+        return None
+    flags = _flatten_signal_to_bool_tensor(subtask_term_signals[signal_name])
+    if flags is None or flags.numel() == 0:
+        return None
+    lo = max(0, min_index)
+    hi = min(flags.numel() - 1, max_index)
+    if lo >= hi:
+        # Need at least two samples inside the window to observe a transition.
+        return None
+    window = flags[lo : hi + 1]
+    # Edges = window[1:] AND NOT window[:-1].  An edge at slice index j (j >= 1) corresponds to a
+    # transition into True at global index lo + j, observed strictly inside the window.
+    edges = window[1:] & ~window[:-1]
+    nonzero = edges.nonzero(as_tuple=False)
+    if nonzero.numel() == 0:
+        return None
+    return int(nonzero[0].item()) + 1 + lo
+
+
+def _overwrite_grasp_signal(annotated_episode: EpisodeData, signal_name: str, grasp_action_index: int) -> None:
+    """Rewrite the recorded grasp signal to a clean monotonic step at ``grasp_action_index``.
+
+    For each recorded step ``k``, the signal is set to ``True`` iff ``k >= grasp_action_index`` and
+    ``False`` otherwise. The original tensor shape, dtype, and device are preserved so downstream
+    export logic (which stacks the per-step tensors) is unaffected.
+    """
+    subtask_term_signals = annotated_episode.data.get("obs", {}).get("datagen_info", {}).get("subtask_term_signals", {})
+    if signal_name not in subtask_term_signals:
+        return
+    signal_value = subtask_term_signals[signal_name]
+    if isinstance(signal_value, list):
+        if len(signal_value) == 1 and signal_value[0].dim() == 1:
+            # Manual-mode representation: a single full-length tensor.
+            tensor = signal_value[0]
+            tensor[:grasp_action_index] = False
+            tensor[grasp_action_index:] = True
+        else:
+            # Auto-mode representation: one tensor per step.
+            for k in range(len(signal_value)):
+                signal_value[k].fill_(bool(k >= grasp_action_index))
+    else:
+        # Fallback: an unstacked tensor representation.
+        signal_value[:grasp_action_index] = False
+        signal_value[grasp_action_index:] = True
+
+
 def main():
     """Add Isaac Lab Mimic annotations to the given demo dataset file."""
     global is_paused, current_action_index, marked_subtask_action_indices
@@ -274,6 +404,42 @@ def main():
     # reset environment
     env.reset()
 
+    # Resolve and validate optional grasp action-index bounds configuration (in percent).
+    grasp_action_bounds_pct: tuple[float, float] | None = None
+    grasp_signal_name: str | None = None
+    if args_cli.grasp_action_bounds is not None:
+        min_action_pct, max_action_pct = args_cli.grasp_action_bounds
+        if not (0.0 <= min_action_pct <= 100.0) or not (0.0 <= max_action_pct <= 100.0):
+            raise ValueError("--grasp_action_bounds percentages must lie within [0, 100].")
+        if min_action_pct > max_action_pct:
+            raise ValueError("--grasp_action_bounds must be specified as MIN_PCT MAX_PCT with MIN_PCT <= MAX_PCT.")
+        grasp_action_bounds_pct = (min_action_pct, max_action_pct)
+
+        # Collect all subtask termination signal names across all eefs to validate the chosen one.
+        all_signal_names: list[str] = []
+        for eef_subtask_configs in env.cfg.subtask_configs.values():
+            for subtask_config in eef_subtask_configs:
+                if subtask_config.subtask_term_signal not in (None, ""):
+                    all_signal_names.append(subtask_config.subtask_term_signal)
+        if len(all_signal_names) == 0:
+            raise ValueError(
+                "--grasp_action_bounds was provided but the environment defines no subtask termination signals."
+            )
+        grasp_signal_name = (
+            args_cli.grasp_subtask_signal if args_cli.grasp_subtask_signal is not None else all_signal_names[0]
+        )
+        if grasp_signal_name in (None, "") or grasp_signal_name not in all_signal_names:
+            raise ValueError(
+                f"--grasp_subtask_signal '{grasp_signal_name}' not found among the environment's"
+                f" subtask termination signals. Available signals: {all_signal_names}"
+            )
+
+        print(
+            "Grasp action-index bounds enabled:\n"
+            f"\t- signal:          {grasp_signal_name}\n"
+            f"\t- action range %:  [{min_action_pct:g}%, {max_action_pct:g}%]"
+        )
+
     # Only enables inputs if this script is NOT headless mode
     if not args_cli.headless and not os.environ.get("HEADLESS", 0):
         keyboard_interface = Se3Keyboard(Se3KeyboardCfg(pos_sensitivity=0.1, rot_sensitivity=0.1))
@@ -288,6 +454,7 @@ def main():
     exported_episode_count = 0
     processed_episode_count = 0
     successful_task_count = 0  # Counter for successful task completions
+    grasp_bounds_rejection_count = 0
     with contextlib.suppress(KeyboardInterrupt) and torch.inference_mode():
         while simulation_app.is_running() and not simulation_app.is_exiting():
             # Iterate over the episodes in the loaded dataset file
@@ -304,6 +471,80 @@ def main():
                         env, episode, success_term, subtask_term_signal_names, subtask_start_signal_names
                     )
 
+                # Apply optional grasp action-index bounds filtering before exporting.
+                if is_episode_annotated_successfully and not skip_episode and grasp_action_bounds_pct is not None:
+                    assert grasp_signal_name is not None
+                    annotated_episode = env.recorder_manager.get_episode(0)
+                    min_action_pct, max_action_pct = grasp_action_bounds_pct
+                    # Convert the percentage window into an inclusive action-index window using the
+                    # length of the source episode's action sequence.
+                    episode_length = len(episode.data["actions"])
+                    if episode_length <= 0:
+                        last_index = 0
+                    else:
+                        last_index = episode_length - 1
+                    min_action_index = int(round(min_action_pct / 100.0 * last_index))
+                    max_action_index = int(round(max_action_pct / 100.0 * last_index))
+                    min_action_index = max(0, min(min_action_index, last_index))
+                    max_action_index = max(0, min(max_action_index, last_index))
+
+                    if args_cli.auto:
+                        # Search for the earliest signal-True step whose action index lies inside the
+                        # configured window, then rewrite the recorded signal to a clean monotonic
+                        # step at that index. This snaps the grasp annotation onto the actual grasp
+                        # moment instead of any later false-positive (e.g. during the insertion phase).
+                        grasp_action_index = _find_grasp_action_index_in_range(
+                            annotated_episode,
+                            grasp_signal_name,
+                            min_action_index,
+                            max_action_index,
+                        )
+                        if grasp_action_index is None:
+                            is_episode_annotated_successfully = False
+                            grasp_bounds_rejection_count += 1
+                            print(
+                                f"\tNo '{grasp_signal_name}' False→True transition found within"
+                                f" [{min_action_pct:g}%, {max_action_pct:g}%] (action indices"
+                                f" [{min_action_index}, {max_action_index}] of"
+                                f" {episode_length}); rejecting the episode."
+                            )
+                        else:
+                            _overwrite_grasp_signal(annotated_episode, grasp_signal_name, grasp_action_index)
+                            grasp_action_pct = 100.0 * grasp_action_index / last_index if last_index > 0 else 0.0
+                            print(
+                                f"\tGrasp '{grasp_signal_name}' annotated at action index"
+                                f" {grasp_action_index} ({grasp_action_pct:.1f}%) within"
+                                f" [{min_action_pct:g}%, {max_action_pct:g}%]."
+                            )
+                    else:
+                        # Manual mode: the user explicitly marked the grasp, so just validate that the
+                        # marked action index lies within the configured window.
+                        grasp_action_index = _find_grasp_action_index(annotated_episode, grasp_signal_name)
+                        if grasp_action_index is None:
+                            is_episode_annotated_successfully = False
+                            grasp_bounds_rejection_count += 1
+                            print(
+                                f"\tCould not locate a marked grasp for signal"
+                                f" '{grasp_signal_name}'; rejecting due to --grasp_action_bounds."
+                            )
+                        elif not (min_action_index <= grasp_action_index <= max_action_index):
+                            is_episode_annotated_successfully = False
+                            grasp_bounds_rejection_count += 1
+                            grasp_action_pct = 100.0 * grasp_action_index / last_index if last_index > 0 else 0.0
+                            print(
+                                f"\tMarked grasp at action index {grasp_action_index}"
+                                f" ({grasp_action_pct:.1f}%) is outside"
+                                f" [{min_action_pct:g}%, {max_action_pct:g}%];"
+                                " rejecting the episode."
+                            )
+                        else:
+                            grasp_action_pct = 100.0 * grasp_action_index / last_index if last_index > 0 else 0.0
+                            print(
+                                f"\tMarked grasp at action index {grasp_action_index}"
+                                f" ({grasp_action_pct:.1f}%) is within"
+                                f" [{min_action_pct:g}%, {max_action_pct:g}%]."
+                            )
+
                 if is_episode_annotated_successfully and not skip_episode:
                     # set success to the recorded episode data and export to file
                     env.recorder_manager.set_success_to_episodes(
@@ -314,13 +555,19 @@ def main():
                     successful_task_count += 1  # Increment successful task counter
                     print("\tExported the annotated episode.")
                 else:
-                    print("\tSkipped exporting the episode due to incomplete subtask annotations.")
+                    print("\tSkipped exporting the episode.")
             break
 
     print(
         f"\nExported {exported_episode_count} (out of {processed_episode_count}) annotated"
         f" episode{'s' if exported_episode_count > 1 else ''}."
     )
+    if grasp_action_bounds_pct is not None:
+        print(
+            f"Episodes rejected by --grasp_action_bounds: {grasp_bounds_rejection_count}"
+            f" (signal='{grasp_signal_name}',"
+            f" range=[{grasp_action_bounds_pct[0]:g}%, {grasp_action_bounds_pct[1]:g}%])."
+        )
     print(
         f"Successful task completions: {successful_task_count}"
     )  # This line is used by the dataset generation test case to check if the expected number of demos were annotated
