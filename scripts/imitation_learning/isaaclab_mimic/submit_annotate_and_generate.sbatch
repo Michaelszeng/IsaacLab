@@ -14,7 +14,7 @@
 #SBATCH --requeue
 
 # Usage:
-#   sbatch scripts/imitation_learning/isaaclab_mimic/submit_annotate_and_generate.sbatch <task> [num_trials] [num_envs]
+#   sbatch scripts/imitation_learning/isaaclab_mimic/submit_annotate_and_generate.sbatch <task> [num_demos] [num_envs]
 #
 # <task> selects which task to run:
 #     insertion       → Isaac-Insertion-Franka-IK-Rel-Mimic-v0
@@ -26,11 +26,11 @@
 # produced *_annotated.hdf5 and just want to regenerate).
 
 if [[ $# -lt 1 ]]; then
-    echo "Usage: sbatch $0 <insertion|gear_assembly> [num_trials] [num_envs]"
+    echo "Usage: sbatch $0 <insertion|gear_assembly> [num_demos] [num_envs]"
     exit 1
 fi
 TASK_KEY="$1"
-NUM_TRIALS="${2:-1000}"
+NUM_DEMOS="${2:-200}"
 NUM_ENVS="${3:-32}"
 
 case "$TASK_KEY" in
@@ -60,8 +60,8 @@ echo "DATE: $DATE"
 echo "TIME: $TIME"
 echo "TASK_KEY: $TASK_KEY"
 echo "TASK_ID:  $TASK_ID"
-echo "NUM_TRIALS: $NUM_TRIALS"
-echo "NUM_ENVS:   $NUM_ENVS"
+echo "NUM_DEMOS: $NUM_DEMOS"
+echo "NUM_ENVS:  $NUM_ENVS"
 echo "SLURM Job ID: $SLURM_JOB_ID"
 echo "SLURM Node:   $HOSTNAME"
 echo "CUDA_VISIBLE_DEVICES: $CUDA_VISIBLE_DEVICES"
@@ -120,12 +120,12 @@ if [[ -f "$GENERATED_HDF5" ]]; then
     echo "Generated HDF5 already exists, removing: $GENERATED_HDF5"
     rm -f "$GENERATED_HDF5"
 fi
-echo ">>> Generating: $ANNOTATED_HDF5 -> $GENERATED_HDF5 (trials=$NUM_TRIALS, envs=$NUM_ENVS)"
+echo ">>> Generating: $ANNOTATED_HDF5 -> $GENERATED_HDF5 (demos=$NUM_DEMOS, envs=$NUM_ENVS)"
 python scripts/imitation_learning/isaaclab_mimic/generate_dataset.py \
     --task "$TASK_ID" \
     --input_file "$ANNOTATED_HDF5" \
     --output_file "$GENERATED_HDF5" \
-    --generation_num_trials "$NUM_TRIALS" \
+    --generation_num_trials "$NUM_DEMOS" \
     --num_envs "$NUM_ENVS" \
     --enable_cameras \
     --headless
