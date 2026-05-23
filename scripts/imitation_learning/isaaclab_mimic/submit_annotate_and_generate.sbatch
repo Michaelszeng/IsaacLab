@@ -14,51 +14,40 @@
 #SBATCH --requeue
 
 # Usage:
-#   sbatch scripts/imitation_learning/isaaclab_mimic/submit_annotate_and_generate.sbatch <task> [num_demos] [num_envs]
-#
-# <task> selects which task to run:
-#     insertion       → Isaac-Insertion-Franka-IK-Rel-Mimic-v0
-#     gear_assembly   → Isaac-GearAssembly-Franka-IK-Rel-Mimic-v0
+#   sbatch scripts/imitation_learning/isaaclab_mimic/submit_annotate_and_generate.sbatch
 #
 # Runs annotation (with --auto) on the source HDF5, then runs MimicGen
 # generation on the annotated file. Set GENERATION_ONLY=1 in the
 # environment to skip the annotation step (useful if you've already
 # produced *_annotated.hdf5 and just want to regenerate).
 
-if [[ $# -lt 1 ]]; then
-    echo "Usage: sbatch $0 <insertion|gear_assembly> [num_demos] [num_envs]"
-    exit 1
-fi
-TASK_KEY="$1"
-NUM_DEMOS="${2:-200}"
-NUM_ENVS="${3:-32}"
+# ============================================================================
+# Annotation + generation parameters
+# ============================================================================
+# Full Isaac Lab task id.
+TASK_ID="Isaac-GearAssembly-Franka-IK-Rel-Mimic-v0"
+# TASK_ID="Isaac-Insertion-Franka-IK-Rel-Mimic-v0"
 
-case "$TASK_KEY" in
-    insertion)
-        TASK_ID="Isaac-Insertion-Franka-IK-Rel-Mimic-v0"
-        SOURCE_HDF5="./datasets/insertion_source.hdf5"
-        ANNOTATED_HDF5="./datasets/insertion_annotated.hdf5"
-        GENERATED_HDF5="./datasets/insertion_generated.hdf5"
-        GRASP_BOUNDS=""
-        ;;
-    gear_assembly)
-        TASK_ID="Isaac-GearAssembly-Franka-IK-Rel-Mimic-v0"
-        SOURCE_HDF5="./datasets/gear_assembly_source.hdf5"
-        ANNOTATED_HDF5="./datasets/gear_assembly_annotated.hdf5"
-        GENERATED_HDF5="./datasets/gear_assembly_generated.hdf5"
-        GRASP_BOUNDS="--grasp_action_bounds 0 80"
-        ;;
-    *)
-        echo "Unknown task '$TASK_KEY'. Choose one of: insertion, gear_assembly."
-        exit 1
-        ;;
-esac
+# Input source / annotated / generated HDF5 paths.
+SOURCE_HDF5="./datasets/gear_assembly_source.hdf5"
+ANNOTATED_HDF5="./datasets/gear_assembly_annotated.hdf5"
+GENERATED_HDF5="./datasets/gear_assembly_generated.hdf5"
+
+# Extra flags passed only to annotate_demos.py (leave empty to omit).
+# Gear-assembly source demos benefit from --grasp_action_bounds; insertion
+# does not currently use this.
+GRASP_BOUNDS="--grasp_action_bounds 0 80"
+# GRASP_BOUNDS=""
+
+# Total demos to generate and parallel envs per round.
+NUM_DEMOS=200
+NUM_ENVS=32
+# ============================================================================
 
 DATE=$(date +"%Y-%m-%d")
 TIME=$(date +"%H-%M-%S")
 echo "DATE: $DATE"
 echo "TIME: $TIME"
-echo "TASK_KEY: $TASK_KEY"
 echo "TASK_ID:  $TASK_ID"
 echo "NUM_DEMOS: $NUM_DEMOS"
 echo "NUM_ENVS:  $NUM_ENVS"
