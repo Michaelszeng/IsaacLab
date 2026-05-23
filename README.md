@@ -5,7 +5,71 @@
 ## Installation
 
 ```bash
-pip install PyQt5
+pip install PyQt5 zarr numcodecs
+```
+
+For policy evaluation, clone my [diffusion policy repo](https://github.com/Michaelszeng/diffusion-policy-experiments) and install (along with required dependencies):
+```bash
+pip install -e /home/michzeng/diffusion-policy --no-deps
+pip install dill==0.3.5.1
+pip install accelerate==0.13.2
+pip install numba hydra-core zarr torchvision diffusers
+pip install git+https://github.com/facebookresearch/r3m.git  # R3M visual encoder used by image-based checkpoints
+```
+
+### Installation on CSAIL SLURM Cluster
+
+```bash
+# 1. Conda env with the Vulkan loader (required for RTX cameras).
+source /data/locomotion/michzeng/miniconda3/etc/profile.d/conda.sh
+conda create -p /data/locomotion/michzeng/conda_envs/IsaacLab \
+  -c conda-forge --override-channels --strict-channel-priority \
+  python=3.11 pip libvulkan-loader vulkan-tools
+conda activate /data/locomotion/michzeng/conda_envs/IsaacLab
+
+# 2. PyTorch matched to the cluster's CUDA build.
+#    Tedrake H200 nodes ship driver 575.57 → CUDA 12.9 → cu129.
+#    The cu129 index only has torch ≥ 2.8; pick a 2.9.x build.
+#    (For older drivers: cu124 with torch 2.4-2.5, cu121 with torch 2.3-2.5.)
+pip install --index-url https://download.pytorch.org/whl/cu129 torch==2.9.1 torchvision==0.24.1
+
+# 3. IsaacSim 5.1 from NVIDIA's PyPI
+pip install --upgrade pip
+pip install 'isaacsim[all,extscache]==5.1.0' --extra-index-url https://pypi.nvidia.com
+
+# 4. Clone IsaacLab fork and install its editable extensions.
+git clone https://github.com/Michaelszeng/IsaacLab.git /data/locomotion/michzeng/IsaacLab
+cd /data/locomotion/michzeng/IsaacLab
+./isaaclab.sh --install
+
+# 5. Smoke test on a GPU node (e.g. via `srun --gres=gpu:1 --pty bash`).
+./isaaclab.sh -p scripts/tutorials/00_sim/launch_app.py --headless
+vulkaninfo --summary | head -20   # should list the H200 — if not, fix Vulkan ICD below.
+```
+
+Notes:
+- **Vulkan ICD fix** (only if step 5 fails to find the GPU): add `export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json` to `~/.bashrc` or your SLURM preamble.
+- **Sync local changes** to the cluster (excluding the local conda env and datasets):
+  ```bash
+  rsync -av --exclude=env --exclude=datasets \
+    /home/michzeng/IsaacLab/ tedrake-h200-1:/data/locomotion/michzeng/IsaacLab/
+  ```
+- **Scale `--num_envs` up** for generation on the cluster — H200 has 143 GB VRAM, so 32-128 parallel envs is realistic (vs the 1-env limit on a local 2080 Ti).
+
+Batch-submit a generation job (no interactive shell needed):
+```bash
+sbatch --gres=gpu:1 --time=4:00:00 --wrap="
+  cd /data/locomotion/michzeng/IsaacLab && \
+  source /data/locomotion/michzeng/miniconda3/etc/profile.d/conda.sh && \
+  conda activate /data/locomotion/michzeng/conda_envs/IsaacLab && \
+  python scripts/imitation_learning/isaaclab_mimic/generate_dataset.py \
+    --task Isaac-GearAssembly-Franka-IK-Rel-Mimic-v0 \
+    --input_file ./datasets/gear_assembly_annotated.hdf5 \
+    --output_file ./datasets/gear_assembly_generated.hdf5 \
+    --generation_num_trials 1000 \
+    --num_envs 32 \
+    --enable_cameras --headless
+"
 ```
 
 ## Data collection pipeline
@@ -17,15 +81,15 @@ python scripts/tools/record_demos.py \
   --task Isaac-Insertion-Franka-IK-Rel-Mimic-v0 \
   --teleop_device spacemouse \
   --dataset_file ./datasets/insertion_source.hdf5 \
-  --enable-cameras \
-  --num_demos 10
+  --enable_cameras \
+  --num_demos 30
 
 python scripts/tools/record_demos.py \
   --task Isaac-GearAssembly-Franka-IK-Rel-Mimic-v0 \
   --teleop_device spacemouse \
   --dataset_file ./datasets/gear_assembly_source.hdf5 \
-  --enable-cameras \
-  --num_demos 10
+  --enable_cameras \
+  --num_demos 30
 ```
 
 Visualize data utility:
@@ -53,7 +117,8 @@ python scripts/imitation_learning/isaaclab_mimic/annotate_demos.py \
   --output_file ./datasets/gear_assembly_annotated.hdf5 \
   --auto \
   --enable_cameras \
-  --headless
+  --headless \
+  --grasp_action_bounds 0 80
 ```
 
 `--auto` uses the peg_grasped signal to find the grasp→insert boundary automatically.
@@ -107,15 +172,53 @@ python scripts/imitation_learning/isaaclab_mimic/generate_dataset.py \
   --input_file ./datasets/insertion_annotated.hdf5 \
   --output_file ./datasets/insertion_generated.hdf5 \
   --generation_num_trials 200 \
+  --enable_cameras \
   --num_envs 16
 
 python scripts/imitation_learning/isaaclab_mimic/generate_dataset.py \
   --task Isaac-GearAssembly-Franka-IK-Rel-Mimic-v0 \
   --input_file ./datasets/gear_assembly_annotated.hdf5 \
   --output_file ./datasets/gear_assembly_generated.hdf5 \
-  --generation_num_trials 200 \
+  --generation_num_trials 300 \
+  --enable_cameras \
   --num_envs 16
 ```
+
+Notes:
+- `--generation_num_trials` is per-invocation, not a global total.
+- Completed demos are flushed to the HDF5 as each episode terminates, so killing the script mid-run is safe.
+
+
+Step 4 — Convert HDF5 → zarr for diffusion policy training:
+
+```bash
+python scripts/tools/hdf5_to_zarr.py \
+  ./datasets/insertion_generated.hdf5 \
+  ./datasets/insertion_generated.zarr
+
+python scripts/tools/hdf5_to_zarr.py \
+  ./datasets/gear_assembly_generated.hdf5 \
+  /home/michzeng/diffusion-policy/data/diffusion_experiments/isaac_sim/gear_assembly_generated.zarr
+```
+
+Produces the standard diffusion-policy layout: every per-step obs becomes a flat `data/<key>` array (cameras at source resolution uint8, scalars cast to float64), with `meta/episode_ends` giving cumulative episode boundaries. Useful flags:
+- `--cameras wrist_cam scene_cam_front` — keep only specific cameras.
+- `--drop-failures` — skip demos with `success=False` (relevant when `generation_keep_failed=True`).
+- `--dtype float32` — half the storage cost vs the default float64 if your training pipeline accepts it.
+- `--overwrite` — delete an existing output zarr first.
+
+
+Step 5 — Evaluate a trained diffusion policy:
+
+```bash
+python scripts/eval/evaluate_model_custom.py \
+  --checkpoint /path/to/checkpoint.ckpt \
+  --task Isaac-GearAssembly-Franka-IK-Rel-Mimic-v0 \
+  --n-rollouts 50 \
+  --enable_cameras
+```
+
+Writes `results.csv`, `summary.txt`, `results.pkl`, and `videos/` to `outputs/<date>/<time>/` (or `--output-dir`). Use `--resume` with the same `--output-dir` to pick up an interrupted eval.
 
 
 ---
