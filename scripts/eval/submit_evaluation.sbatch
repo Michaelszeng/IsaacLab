@@ -1,13 +1,14 @@
 #!/bin/bash
-#SBATCH --job-name=evaluate_isaaclab
+#SBATCH --job-name=evaluate_pusht
 #SBATCH --account=locomotion
-#SBATCH --partition=locomotion-h200
-#SBATCH --qos=locomotion-main
+#SBATCH --partition=vision-shared-rtx3090
+#SBATCH --exclude=freeman-titanrtx-2,freeman-titanrtx-1,gpu20-2.drl
+#SBATCH --qos=shared-if-available
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=64G
+#SBATCH --mem=32G
 #SBATCH --time=24:00:00
 #SBATCH --output=logs/slurm-%j.out
 #SBATCH --error=logs/slurm-%j.err
@@ -18,8 +19,8 @@
 #
 # SLURM runner for scripts/eval/evaluate_model_custom.py.
 # Pass one or more action horizons; all checkpoints in CHECKPOINT_PATH are
-# evaluated at each. Other tunables (TASK, N_ROLLOUTS, N_ENVS, N_VIDEO_TRIALS,
-# RANDOMNESS) are constants at the top of this script.
+# evaluated at each. Other tunables (TASK, N_ROLLOUTS, N_ENVS, N_VIDEO_TRIALS)
+# are constants at the top of this script.
 
 if [[ $# -eq 0 ]]; then
     echo "Usage: sbatch scripts/eval/submit_evaluation.sbatch <action_horizon> [action_horizon ...]"
@@ -37,24 +38,19 @@ echo "ACTION_HORIZONS: ${ACTION_HORIZONS[*]}"
 # Evaluation parameters
 # ============================================================================
 # Full Isaac Lab task id (must match the checkpoints' training task).
-TASK="Isaac-GearAssembly-Franka-IK-Rel-Mimic-v0"
 # TASK="Isaac-Insertion-Franka-IK-Rel-Mimic-v0"
+TASK="Isaac-GearAssembly-Franka-IK-Rel-Mimic-v0"
 
-# Directory containing one or more .ckpt files (all will be evaluated at each
-# horizon). The corresponding normalizer.pt is expected one level up.
+# Directory containing one or more .ckpt files. The corresponding normalizer.pt is expected one level up.
 CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/isaac_sim/gear_assembly_baseline/checkpoints"
-# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/isaac_sim/insertion_baseline/checkpoints"
 
 # Number of trials per (checkpoint, action_horizon) and parallel envs per round.
-N_ROLLOUTS=50
+N_ROLLOUTS=500
 N_ENVS=16
 
 # Number of trials per (checkpoint, action_horizon) to save MP4 videos for.
 # 0 = off, -1 = all. Anything > 0 forces video recording (a bit slower).
 N_VIDEO_TRIALS=20
-
-# Recorded in results.pkl; Isaac Lab tasks don't currently use this.
-RANDOMNESS="low"
 # ============================================================================
 
 # Extract the experiment name as the directory immediately before "checkpoints".
@@ -118,7 +114,6 @@ for ckpt in "${CHECKPOINTS[@]}"; do
             --n-envs "${N_ENVS}" \
             --n-action-steps "${h}" \
             --n-video-trials "${N_VIDEO_TRIALS}" \
-            --randomness "${RANDOMNESS}" \
             --output-dir "${OUTPUT_DIR}" \
             --resume \
             --enable_cameras \

@@ -34,12 +34,6 @@ parser.add_argument(
 )
 parser.add_argument("--n-rollouts", type=int, default=10)
 parser.add_argument("--n-envs", type=int, default=1)
-parser.add_argument(
-    "--randomness",
-    type=str,
-    default="low",
-    help="Compatibility flag (recorded in results.pkl); Isaac Lab tasks don't currently use this.",
-)
 parser.add_argument("--save-video", action="store_true", default=True)
 parser.add_argument("--no-save-video", dest="save_video", action="store_false")
 parser.add_argument(
@@ -557,7 +551,6 @@ if __name__ == "__main__":
                     "success_rate": n_success / n_total if n_total > 0 else 0.0,
                     "checkpoint": args.checkpoint,
                     "task": args.task,
-                    "randomness": args.randomness,
                     "n_obs_steps": n_obs_steps,
                     "rollout_max_steps": rollout_max_steps,
                 },
