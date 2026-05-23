@@ -232,8 +232,11 @@ class GearAssemblySceneCfg(InteractiveSceneCfg):
             clipping_range=(0.01, 2.0),
         ),
         offset=CameraCfg.OffsetCfg(
-            pos=(0.13, 0.0, -0.15),
-            rot=(-0.70614, 0.03701, 0.03701, -0.70614),
+            # Mounted 12 cm out on +X (clear of the panda_hand body), 2 cm
+            # behind the hand origin, tilted ~10° toward the fingertip so the
+            # EEF appears closer to the centre of the frame.
+            pos=(0.05, 0.0, -0.01),
+            rot=(0.70442, -0.06163, -0.06163, 0.70442),
             convention="ros",
         ),
     )
