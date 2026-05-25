@@ -42,7 +42,7 @@ echo "ACTION_HORIZONS: ${ACTION_HORIZONS[*]}"
 TASK="Isaac-GearAssembly-Franka-IK-Rel-Mimic-v0"
 
 # Directory containing one or more .ckpt files. The corresponding normalizer.pt is expected one level up.
-CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/isaac_sim/gear_assembly_baseline/checkpoints"
+CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/isaac_sim/2_obs_gear_assembly_human_expert/checkpoints"
 
 # Number of trials per (checkpoint, action_horizon) and parallel envs per round.
 N_ROLLOUTS=500
@@ -51,6 +51,9 @@ N_ENVS=16
 # Number of trials per (checkpoint, action_horizon) to save MP4 videos for.
 # 0 = off, -1 = all. Anything > 0 forces video recording (a bit slower).
 N_VIDEO_TRIALS=20
+
+# Maximum rollout steps per trial (overrides the env's episode_length_s).
+TASK_TIMEOUT=220
 # ============================================================================
 
 # Extract the experiment name as the directory immediately before "checkpoints".
@@ -84,14 +87,20 @@ echo "ACTION_HORIZONS:  ${ACTION_HORIZONS[*]}"
 echo "N_ROLLOUTS:       $N_ROLLOUTS"
 echo "N_ENVS:           $N_ENVS"
 echo "N_VIDEO_TRIALS:   $N_VIDEO_TRIALS"
+echo "TASK_TIMEOUT:     $TASK_TIMEOUT"
 echo "=========================================="
 
 # --- Enumerate checkpoints ---
 shopt -s nullglob
-CHECKPOINTS=("${CHECKPOINT_PATH}"/*.ckpt)
+ALL_CHECKPOINTS=("${CHECKPOINT_PATH}"/*.ckpt)
 shopt -u nullglob
+CHECKPOINTS=()
+for c in "${ALL_CHECKPOINTS[@]}"; do
+    [[ "$(basename "$c")" == "latest.ckpt" ]] && continue
+    CHECKPOINTS+=("$c")
+done
 if [[ ${#CHECKPOINTS[@]} -eq 0 ]]; then
-    echo "No .ckpt files found in ${CHECKPOINT_PATH}"
+    echo "No .ckpt files found in ${CHECKPOINT_PATH} (excluding latest.ckpt)"
     exit 1
 fi
 echo "Found ${#CHECKPOINTS[@]} checkpoint(s):"
@@ -114,6 +123,7 @@ for ckpt in "${CHECKPOINTS[@]}"; do
             --n-envs "${N_ENVS}" \
             --n-action-steps "${h}" \
             --n-video-trials "${N_VIDEO_TRIALS}" \
+            --task-timeout "${TASK_TIMEOUT}" \
             --output-dir "${OUTPUT_DIR}" \
             --resume \
             --enable_cameras \

@@ -11,10 +11,17 @@ pip install PyQt5 zarr numcodecs
 For policy evaluation, clone my [diffusion policy repo](https://github.com/Michaelszeng/diffusion-policy-experiments) and install (along with required dependencies):
 ```bash
 pip install -e /home/michzeng/diffusion-policy --no-deps
-pip install dill==0.3.5.1
-pip install accelerate==0.13.2
-pip install numba hydra-core zarr torchvision diffusers
-pip install git+https://github.com/facebookresearch/r3m.git  # R3M visual encoder used by image-based checkpoints
+pip install dill==0.3.5.1 accelerate==0.13.2 diffusers==0.11.1
+pip install hydra-core==1.2.0 "zarr<3" "numcodecs>=0.11.0" "numba>=0.61.0" deprecated
+pip install imageio==2.22.0 imageio-ffmpeg==0.4.7 "opencv-python>=4.5.0"
+pip install einops==0.4.1
+# diffusers 0.11.1 imports HfFolder/cached_download (hf_hub <0.27); transformers ≥4.45 requires hf_hub ≥0.30,
+# so we install transformers 4.40-4.44 (compatible with hf_hub 0.23.2+) together to avoid pip re-resolving:
+pip install "transformers>=4.40,<4.45" "huggingface-hub==0.25.2"
+pip install "r3m @ https://github.com/facebookresearch/r3m/archive/b2334e726887fa0206962d7984c69c5fb09cceab.tar.gz"
+# IsaacSim 5.1's omni.syntheticdata has a known NumPy 2.x bug (camera annotator dtype error);
+# pin to NumPy 1.x. numba ≥0.61 still supports this (numpy 1.24-2.1 range).
+pip install "numpy<2"
 ```
 
 ### Installation on CSAIL SLURM Cluster
@@ -45,6 +52,23 @@ cd /data/locomotion/michzeng/IsaacLab
 # 5. Smoke test on a GPU node (e.g. via `srun --gres=gpu:1 --pty bash`).
 ./isaaclab.sh -p scripts/tutorials/00_sim/launch_app.py --headless
 vulkaninfo --summary | head -20   # should list the H200 — if not, fix Vulkan ICD below.
+
+# 6. Policy evaluation dependencies (required for evaluate_model_custom.py).
+pip install dill==0.3.5.1 accelerate==0.13.2 diffusers==0.11.1
+pip install hydra-core==1.2.0 "zarr<3" "numcodecs>=0.11.0" "numba>=0.61.0" deprecated
+pip install imageio==2.22.0 imageio-ffmpeg==0.4.7 "opencv-python>=4.5.0"
+pip install einops==0.4.1
+# diffusers 0.11.1 imports HfFolder/cached_download (hf_hub <0.27); transformers ≥4.45 requires hf_hub ≥0.30,
+# so we install transformers 4.40-4.44 (compatible with hf_hub 0.23.2+) together to avoid pip re-resolving:
+pip install "transformers>=4.40,<4.45" "huggingface-hub==0.25.2"
+# IsaacSim 5.1's omni.syntheticdata has a known NumPy 2.x bug (camera annotator dtype error);
+# pin to NumPy 1.x. numba ≥0.61 still supports this (numpy 1.24-2.1 range).
+pip install "numpy<2"
+pip install PyQt5
+# R3M visual encoder for image-based checkpoints
+pip install "r3m @ https://github.com/facebookresearch/r3m/archive/b2334e726887fa0206962d7984c69c5fb09cceab.tar.gz"
+# Install the diffusion policy package from the cluster copy:
+pip install -e /data/locomotion/michzeng/diffusion-policy-experiments --no-deps
 ```
 
 Notes:

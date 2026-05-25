@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=isaaclab_mimic
+#SBATCH --job-name=isaaclab_mimic_annotate_and_generate
 #SBATCH --account=locomotion
 #SBATCH --partition=locomotion-h200
 #SBATCH --qos=locomotion-main
@@ -30,8 +30,12 @@ TASK_ID="Isaac-GearAssembly-Franka-IK-Rel-Mimic-v0"
 
 # Input source / annotated / generated HDF5 paths.
 SOURCE_HDF5="./datasets/gear_assembly_source.hdf5"
-ANNOTATED_HDF5="./datasets/gear_assembly_annotated.hdf5"
-GENERATED_HDF5="./datasets/gear_assembly_generated.hdf5"
+ANNOTATED_HDF5="./datasets/gear_assembly_annotated_750.hdf5"
+GENERATED_HDF5="./datasets/gear_assembly_generated_750.hdf5"
+
+# Zarr output paths (derived from the HDF5 paths above).
+SOURCE_ZARR="${SOURCE_HDF5%.hdf5}.zarr"
+GENERATED_ZARR="${GENERATED_HDF5%.hdf5}.zarr"
 
 # Extra flags passed only to annotate_demos.py (leave empty to omit).
 # Gear-assembly source demos benefit from --grasp_action_bounds; insertion
@@ -39,9 +43,12 @@ GENERATED_HDF5="./datasets/gear_assembly_generated.hdf5"
 GRASP_BOUNDS="--grasp_action_bounds 0 80"
 # GRASP_BOUNDS=""
 
+# Set to 1 to skip the annotation step (e.g. if *_annotated.hdf5 already exists).
+SKIP_ANNOTATION=1
+
 # Total demos to generate and parallel envs per round.
-NUM_DEMOS=200
-NUM_ENVS=32
+NUM_DEMOS=750
+NUM_ENVS=16
 # ============================================================================
 
 DATE=$(date +"%Y-%m-%d")
@@ -75,10 +82,12 @@ export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
 echo "SOURCE_HDF5:    $SOURCE_HDF5"
 echo "ANNOTATED_HDF5: $ANNOTATED_HDF5"
 echo "GENERATED_HDF5: $GENERATED_HDF5"
+echo "SOURCE_ZARR:    $SOURCE_ZARR"
+echo "GENERATED_ZARR: $GENERATED_ZARR"
 echo "=========================================="
 
 # --- Step 1: Annotate ---
-if [[ "${GENERATION_ONLY:-0}" != "1" ]]; then
+if [[ "${GENERATION_ONLY:-0}" != "1" && "${SKIP_ANNOTATION}" != "1" ]]; then
     if [[ ! -f "$SOURCE_HDF5" ]]; then
         echo "Source HDF5 not found: $SOURCE_HDF5"
         exit 1
@@ -97,7 +106,7 @@ if [[ "${GENERATION_ONLY:-0}" != "1" ]]; then
         --headless \
         $GRASP_BOUNDS
 else
-    echo ">>> GENERATION_ONLY=1, skipping annotation step."
+    echo ">>> Skipping annotation step (GENERATION_ONLY=1 or SKIP_ANNOTATION=1)."
 fi
 
 # --- Step 2: Generate ---
@@ -121,3 +130,19 @@ python scripts/imitation_learning/isaaclab_mimic/generate_dataset.py \
 
 echo "=========================================="
 echo "Done. Output: $GENERATED_HDF5"
+
+# --- Step 3: Convert source and generated HDF5 → zarr ---
+echo ">>> Converting source HDF5 to zarr: $SOURCE_HDF5 -> $SOURCE_ZARR"
+python scripts/tools/hdf5_to_zarr.py \
+    "$SOURCE_HDF5" \
+    "$SOURCE_ZARR" \
+    --overwrite
+
+echo ">>> Converting generated HDF5 to zarr: $GENERATED_HDF5 -> $GENERATED_ZARR"
+python scripts/tools/hdf5_to_zarr.py \
+    "$GENERATED_HDF5" \
+    "$GENERATED_ZARR" \
+    --overwrite
+
+echo "=========================================="
+echo "Done. Zarr outputs: $SOURCE_ZARR  $GENERATED_ZARR"
