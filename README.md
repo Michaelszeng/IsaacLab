@@ -107,14 +107,14 @@ python scripts/tools/record_demos.py \
   --teleop_device spacemouse \
   --dataset_file ./datasets/insertion_source.hdf5 \
   --enable_cameras \
-  --num_demos 30
+  --num_demos 50
 
 python scripts/tools/record_demos.py \
   --task Isaac-GearAssembly-Franka-IK-Rel-Mimic-v0 \
   --teleop_device spacemouse \
   --dataset_file ./datasets/gear_assembly_source.hdf5 \
   --enable_cameras \
-  --num_demos 30
+  --num_demos 50
 ```
 
 Visualize data utility:
