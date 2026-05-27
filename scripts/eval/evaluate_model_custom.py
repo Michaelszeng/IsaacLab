@@ -571,13 +571,12 @@ if __name__ == "__main__":
     print(f"\nFinal success rate: {n_success}/{n_total} ({final_success_rate:.1%})")
     print(f"Results written to {out_dir}/")
 
-    # Best-effort clean shutdown of the sim app, then a hard exit to bypass any
-    # C++ destructor segfaults during normal Python teardown (mirrors the
-    # reference's os._exit(0) pattern).
+    # Skip `simulation_app.close()` and the rest of Python teardown: Isaac Sim's
+    # graceful shutdown intermittently hangs in a poll() across its ~400
+    # worker threads, which stalls multi-checkpoint sbatch loops. All result
+    # artifacts (results.csv, results.pkl, summary.txt, videos) are already
+    # flushed and closed above, so a kernel-level _exit is safe here -- the OS
+    # tears down the CUDA context, FDs, and memory on process exit.
     sys.stdout.flush()
     sys.stderr.flush()
-    try:
-        simulation_app.close()
-    except Exception:
-        pass
     os._exit(0)

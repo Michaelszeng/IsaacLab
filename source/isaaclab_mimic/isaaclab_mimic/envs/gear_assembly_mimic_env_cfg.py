@@ -31,7 +31,7 @@ class FrankaGearAssemblyIKRelMimicEnvCfg(FrankaGearAssemblyIKRelEnvCfg, MimicEnv
         self.datagen_config.generation_transform_first_robot_pose = False
         self.datagen_config.generation_interpolate_from_last_target_pose = True
         self.datagen_config.max_num_failures = 50
-        self.datagen_config.seed = 1
+        self.datagen_config.seed = 77
 
         subtask_configs = []
 

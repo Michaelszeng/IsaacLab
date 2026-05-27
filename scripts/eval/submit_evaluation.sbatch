@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=evaluate_pusht
 #SBATCH --account=locomotion
-#SBATCH --partition=vision-shared-rtx3090
+#SBATCH --partition=vision-shared-titanrtx
 #SBATCH --exclude=freeman-titanrtx-2,freeman-titanrtx-1,gpu20-2.drl
 #SBATCH --qos=shared-if-available
 #SBATCH --nodes=1
@@ -42,7 +42,13 @@ echo "ACTION_HORIZONS: ${ACTION_HORIZONS[*]}"
 TASK="Isaac-GearAssembly-Franka-IK-Rel-Mimic-v0"
 
 # Directory containing one or more .ckpt files. The corresponding normalizer.pt is expected one level up.
-CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/isaac_sim/2_obs_gear_assembly_human_expert/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/isaac_sim/2_obs_gear_assembly_human_expert/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/isaac_sim/2_obs_gear_assembly_human_expert_attention_double_enc/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/isaac_sim/4_obs_gear_assembly_human_expert_attention_double_enc/checkpoints"
+CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/isaac_sim/8_obs_gear_assembly_human_expert_attention_double_enc/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/isaac_sim/12_obs_gear_assembly_human_expert_attention_double_enc/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/isaac_sim/16_obs_gear_assembly_human_expert_attention_double_enc/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/isaac_sim/20_obs_gear_assembly_human_expert_attention_double_enc/checkpoints"
 
 # Number of trials per (checkpoint, action_horizon) and parallel envs per round.
 N_ROLLOUTS=500

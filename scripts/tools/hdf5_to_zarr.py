@@ -55,7 +55,16 @@ except ImportError as e:
     raise SystemExit(
         f"Missing dependency: {e}\n"
         "Install with:\n"
-        "  pip install zarr numcodecs"
+        "  pip install 'zarr<3' numcodecs"
+    )
+
+# This script targets zarr 2.18.x (the version pinned in the Isaac Lab conda
+# env).  The downstream diffusion-policy training pipeline reads v2-format
+# stores, which is the only format zarr 2.x writes.
+if int(zarr.__version__.split(".")[0]) != 2:
+    raise SystemExit(
+        f"This script targets zarr 2.x (got {zarr.__version__}). "
+        "Install with:  pip install 'zarr<3' numcodecs"
     )
 
 
@@ -206,11 +215,9 @@ def main():
         print()
 
         # ---- Create output zarr ----
-        # Explicit zarr_format=2 so the output is compatible with the existing
-        # diffusion-policy training pipeline (which reads v2-format zarrs).
-        # zarr v3 defaults to writing v3-format stores otherwise and rejects
-        # numcodecs.Blosc as a non-BytesBytesCodec.
-        out = zarr.open_group(args.output, mode="w", zarr_format=2)
+        # zarr 2.x writes v2-format stores by default, which is what the
+        # downstream diffusion-policy training pipeline expects.
+        out = zarr.open_group(args.output, mode="w")
         out_data = out.create_group("data")
         out_meta = out.create_group("meta")
         compressor = Blosc(cname="lz4", clevel=args.compression_level, shuffle=Blosc.SHUFFLE)
@@ -219,11 +226,8 @@ def main():
         out_arrays = {}
 
         def make_dataset(name, shape, dtype, chunks):
-            # Use the modern create_array API.  `compressors=<codec>` is the
-            # non-deprecated spelling; for zarr_format=2 a single codec is used
-            # as the v2 `compressor` field.
-            return out_data.create_array(
-                name=name, shape=shape, dtype=dtype, chunks=chunks, compressors=compressor
+            return out_data.create_dataset(
+                name=name, shape=shape, dtype=dtype, chunks=chunks, compressor=compressor
             )
 
         # Scalar obs
@@ -280,12 +284,12 @@ def main():
         assert offset == total, f"offset {offset} != total {total}"
 
         # ---- meta/episode_ends ----
-        episode_ends_arr = out_meta.create_array(
+        episode_ends_arr = out_meta.create_dataset(
             name="episode_ends",
             shape=episode_ends.shape,
-            chunks=(min(512, max(len(episode_ends), 1)),),
             dtype=np.int64,
-            compressors=compressor,
+            chunks=(min(512, max(len(episode_ends), 1)),),
+            compressor=compressor,
         )
         episode_ends_arr[:] = episode_ends
 

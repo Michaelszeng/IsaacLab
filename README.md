@@ -69,6 +69,7 @@ pip install PyQt5
 pip install "r3m @ https://github.com/facebookresearch/r3m/archive/b2334e726887fa0206962d7984c69c5fb09cceab.tar.gz"
 # Install the diffusion policy package from the cluster copy:
 pip install -e /data/locomotion/michzeng/diffusion-policy-experiments --no-deps
+pip install statsmodels
 ```
 
 Notes:

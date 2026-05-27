@@ -1,13 +1,14 @@
 #!/bin/bash
 #SBATCH --job-name=isaaclab_mimic_annotate_and_generate
 #SBATCH --account=locomotion
-#SBATCH --partition=locomotion-h200
-#SBATCH --qos=locomotion-main
+#SBATCH --partition=vision-shared-titanrtx
+#SBATCH --exclude=freeman-titanrtx-2,freeman-titanrtx-1,gpu20-2.drl
+#SBATCH --qos=shared-if-available
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=128G
+#SBATCH --mem=64G
 #SBATCH --time=24:00:00
 #SBATCH --output=logs/slurm-%j.out
 #SBATCH --error=logs/slurm-%j.err
@@ -30,7 +31,7 @@ TASK_ID="Isaac-GearAssembly-Franka-IK-Rel-Mimic-v0"
 
 # Input source / annotated / generated HDF5 paths.
 SOURCE_HDF5="./datasets/gear_assembly_source.hdf5"
-ANNOTATED_HDF5="./datasets/gear_assembly_annotated_750.hdf5"
+ANNOTATED_HDF5="./datasets/gear_assembly_annotated.hdf5"
 GENERATED_HDF5="./datasets/gear_assembly_generated_750.hdf5"
 
 # Zarr output paths (derived from the HDF5 paths above).

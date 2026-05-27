@@ -9,7 +9,7 @@
 
 set -euo pipefail
 
-ACTION_HORIZONS=(1 2 3 4 5 6 8 10 12 15)
+ACTION_HORIZONS=(1 2 3 4 5 6 8 10)
 SBATCH_SCRIPT="scripts/eval/submit_evaluation.sbatch"
 
 echo "Submitting ${#ACTION_HORIZONS[@]} jobs (one per action horizon)..."
