@@ -423,8 +423,7 @@ if __name__ == "__main__":
     else:
         rollout_max_steps = int(env_cfg.episode_length_s / (env_cfg.sim.dt * env_cfg.decimation))
     print(f"Creating env (task={args.task}, max_steps={rollout_max_steps})")
-
-    np.random.seed(42)
+    
     env = gym.make(args.task, cfg=env_cfg).unwrapped
 
     # Cameras to use for videos (raw resolution from env.obs, not the policy-input resized ones).

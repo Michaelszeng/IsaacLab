@@ -70,6 +70,12 @@ parser.add_argument(
     default=None,
     help="Rate limit. Default: 30 Hz in GUI mode, unlimited when --headless.",
 )
+parser.add_argument(
+    "--n-video-trials",
+    type=int,
+    default=20,
+    help="Number of initial scripted policy attempts to record as video.",
+)
 
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -89,8 +95,11 @@ simulation_app = app_launcher.app
 import math
 import time
 
+import cv2
 import gymnasium as gym
 import h5py
+import imageio
+import numpy as np
 import torch
 
 import isaaclab.utils.math as math_utils
@@ -173,14 +182,27 @@ RELATIVE_YAW_OFFSET_DEG = 0.7
 
 # Target-pose noise — added to (target_x, target_y, target_z) each step
 # before delta computation. Provides trajectory diversity for downstream IL.
-NOISE_STD_XY = 0.003
-NOISE_STD_Z = 0.002
+NOISE_STD_XY = 0.006
+NOISE_STD_Z = 0.005
 
 # Target-rotation noise — a small random rotation applied to ``target_quat``
 # each step before delta computation, for states that actively command an
 # orientation. Expressed as a per-axis std (radians) on the rotation vector
 # (axis-angle), so the perturbation is isotropic in SO(3) for small angles.
-NOISE_STD_ROT = 0.01
+NOISE_STD_ROT = 0.025
+
+# Action noise — added directly to the (delta_pos, delta_rot) action
+# components after magnitude clamping, just before the action is sent to
+# the controller. Unlike the target-pose noise above (which perturbs the
+# *goal* and produces correlated multi-step drift toward a shifted target),
+# action noise perturbs the *commanded motion* independently each step,
+# providing additional state-distribution coverage for downstream IL.
+# Expressed as per-axis std on the 3D delta vectors (m for pos, rad for rot
+# axis-angle). Keep these small relative to MIN_DELTA_*/MAX_DELTA_* so the
+# noisy action stays well within the controller's operating range without
+# needing to re-clamp.
+ACTION_NOISE_STD_POS = 0.0025
+ACTION_NOISE_STD_ROT = 0.02
 
 # =========================================================================== #
 
@@ -463,6 +485,13 @@ class GearAssemblyScriptedExpert:
             delta_rot = math_utils.axis_angle_from_quat(delta_quat.unsqueeze(0))[0]
             delta_rot = _clamp_magnitude(delta_rot, MIN_DELTA_ROT, MAX_DELTA_ROT)
 
+        # Per-step action noise on top of the (clamped) deltas. Applied to
+        # both components regardless of state — for orientation-holding
+        # states this introduces a small random rotation drift, which is
+        # self-corrected on entry to the next orientation-commanding state.
+        delta_pos = delta_pos + torch.randn(3, dtype=dtype, device=device) * ACTION_NOISE_STD_POS
+        delta_rot = delta_rot + torch.randn(3, dtype=dtype, device=device) * ACTION_NOISE_STD_ROT
+
         gripper_t = torch.tensor([gripper], dtype=dtype, device=device)
 
         return torch.cat([delta_pos, delta_rot, gripper_t], dim=0)
@@ -471,6 +500,33 @@ class GearAssemblyScriptedExpert:
 # ---------------------------------------------------------------------------
 # I/O helpers
 # ---------------------------------------------------------------------------
+
+
+def _make_video_frame(env_obs, env_idx: int, video_cam_keys: list) -> np.ndarray:
+    """Build a side-by-side video frame for env_idx by concatenating cameras
+    at source resolution. All cameras must share the same H.
+    """
+    pol = env_obs["policy"] if isinstance(env_obs, dict) and "policy" in env_obs else env_obs
+    panes = []
+    for k in video_cam_keys:
+        if k not in pol:
+            continue
+        img = pol[k][env_idx].detach().cpu().numpy().astype(np.uint8)
+        if img.shape[-1] == 4:
+            img = img[..., :3]
+        panes.append(img)
+    if not panes:
+        return np.zeros((240, 320, 3), dtype=np.uint8)
+    h = panes[0].shape[0]
+    panes = [p if p.shape[0] == h else cv2.resize(p, (int(p.shape[1] * h / p.shape[0]), h)) for p in panes]
+    return np.concatenate(panes, axis=1)
+
+
+def _write_mp4(frames, path, fps=10):
+    """Write a list of (H, W, 3) uint8 frames to MP4."""
+    with imageio.get_writer(path, fps=fps, codec="libx264", pixelformat="yuv420p") as writer:
+        for frame in frames:
+            writer.append_data(frame)
 
 
 def _count_existing_demos(path: str) -> int:
@@ -548,6 +604,26 @@ def main():
     total_episodes = 0
     total_successes = 0
 
+    # Video recording setup
+    videos_dir = os.path.join(output_dir, "scripted_videos")
+    videos_started = 0
+    record_env = [False] * env.num_envs
+    frame_buffers = [[] for _ in range(env.num_envs)]
+    video_cam_keys = []
+    if args_cli.n_video_trials > 0:
+        os.makedirs(videos_dir, exist_ok=True)
+        # Find camera keys in the policy obs dict
+        pol = obs["policy"] if isinstance(obs, dict) and "policy" in obs else obs
+        video_cam_keys = sorted([k for k in pol.keys() if k.startswith("cam_") or k.endswith("_cam")])
+        if not video_cam_keys:
+            print("[scripted_expert] Warning: --n-video-trials > 0 but no camera obs keys detected.")
+        
+        for i in range(env.num_envs):
+            if videos_started < args_cli.n_video_trials:
+                record_env[i] = True
+                videos_started += 1
+                frame_buffers[i].append(_make_video_frame(obs, i, video_cam_keys))
+
     while simulation_app.is_running():
         with torch.inference_mode():
             # 1) Update FSM state per env from the current obs.
@@ -565,6 +641,11 @@ def main():
                 last_logged_state[0] = expert.fsm_state[0]
 
         obs, _, terminated, truncated, _ = env.step(actions)
+
+        if args_cli.n_video_trials > 0:
+            for i in range(env.num_envs):
+                if record_env[i]:
+                    frame_buffers[i].append(_make_video_frame(obs, i, video_cam_keys))
 
         # Count the step that just occurred for every env.
         for i in range(env.num_envs):
@@ -598,6 +679,19 @@ def main():
                     f" {episode_steps[i]} steps. Success rate so far:"
                     f" {total_successes}/{total_episodes} ({rate:.1%})."
                 )
+                
+                if args_cli.n_video_trials > 0 and record_env[i]:
+                    video_path = os.path.join(videos_dir, f"trial_{total_episodes:04d}_{outcome}.mp4")
+                    _write_mp4(frame_buffers[i], video_path, fps=10)
+                    print(f"[scripted_expert] Saved video: {video_path}")
+                    frame_buffers[i] = []
+                    if videos_started < args_cli.n_video_trials:
+                        record_env[i] = True
+                        videos_started += 1
+                        frame_buffers[i].append(_make_video_frame(obs, i, video_cam_keys))
+                    else:
+                        record_env[i] = False
+
                 episode_steps[i] = 0
                 expert.reset_env(i)
                 last_logged_state[i] = None

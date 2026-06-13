@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=isaaclab_collect_demos_scripted
 #SBATCH --account=locomotion
-#SBATCH --partition=vision-shared-rtx3090
+#SBATCH --partition=vision-shared-titanrtx
 #SBATCH --exclude=freeman-titanrtx-2,freeman-titanrtx-1,gpu20-2.drl
 #SBATCH --qos=shared-if-available
 #SBATCH --nodes=1
