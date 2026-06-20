@@ -452,14 +452,86 @@ def randomize_held_gear_about_center(
     # matches what the rest of the env observes (env-relative).
     pos = (asset.data.root_pos_w - env.scene.env_origins)[0]
     print(
-        f"    -> gear pos after randomize_held_gear_about_center:"
-        f" ({pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f})",
+        f"    -> gear pos after randomize_held_gear_about_center: ({pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f})",
         flush=True,
     )
 
 
+def bind_slippery_gear_material(
+    env,
+    env_ids,
+    asset_names: list,
+    static_friction: float = 0.1,
+    dynamic_friction: float = 0.1,
+    restitution: float = 0.0,
+):
+    """Bind a low-friction physics material to the listed assets in every env.
+
+    PhysX combines two contacting materials according to the higher-priority
+    ``friction_combine_mode``. We use ``"max"``, which has the highest priority
+    over the default ``"average"`` used by the Franka and the table. Net effect:
+
+      * Two gears in contact (both use this material) →  max(0.1, 0.1) = 0.1
+        — slippery, no jamming on tooth-on-tooth.
+      * Gear vs. gripper finger (finger uses "average", high friction)
+        →  max(0.1, finger_friction) = finger_friction — grasp unaffected.
+      * Gear vs. table (table uses "average", default friction)
+        →  max(0.1, table_friction) = table_friction — table contact unaffected.
+
+    The material prim is created once (lazily, under ``/World``) and reused for
+    every binding, so this event is essentially free on subsequent calls.
+    Registered in ``EventCfg`` with ``mode="startup"`` so it runs after assets
+    spawn but before the first physics step.
+    """
+    from isaaclab.sim.spawners.materials import RigidBodyMaterialCfg
+    from isaaclab.sim.utils import bind_physics_material, get_current_stage
+
+    material_path = "/World/Materials/SlipperyGearMaterial"
+    stage = get_current_stage()
+
+    if not stage.GetPrimAtPath(material_path).IsValid():
+        material_cfg = RigidBodyMaterialCfg(
+            static_friction=static_friction,
+            dynamic_friction=dynamic_friction,
+            restitution=restitution,
+            friction_combine_mode="max",
+            restitution_combine_mode="max",
+        )
+        material_cfg.func(material_path, material_cfg)
+        print(
+            f"[startup] created slippery gear material at {material_path}:"
+            f" static={static_friction}, dynamic={dynamic_friction},"
+            f" restitution={restitution}, combine='max'",
+            flush=True,
+        )
+
+    bound = 0
+    for asset_name in asset_names:
+        asset = env.scene[asset_name]
+        # Per-env instances live under /World/envs/env_N/<PrimName>.
+        for prim_path in asset.root_physx_view.prim_paths:
+            bind_physics_material(prim_path, material_path)
+            bound += 1
+    print(f"[startup] bound slippery material to {bound} asset instance(s).", flush=True)
+
+
 @configclass
 class EventCfg:
+    # One-shot: install a low-friction physics material on all gear bodies (and
+    # the gear base) so gear-on-gear contact is slippery while gear-on-gripper
+    # and gear-on-table contacts are unaffected. See
+    # ``bind_slippery_gear_material`` for the combine-mode trick.
+    apply_slippery_material = EventTerm(
+        func=bind_slippery_gear_material,
+        mode="startup",
+        params={
+            "asset_names": ["held_asset", "gear_small", "gear_medium", "fixed_asset"],
+            "static_friction": 0.05,
+            "dynamic_friction": 0.05,
+            "restitution": 0.1,
+        },
+    )
+
     # Resets all objects (including non-active gears) to their init_state positions.
     # Non-active gears reset to gear base position — matching the original task behaviour.
     reset_all = EventTerm(func=mdp.reset_scene_to_default, mode="reset")
