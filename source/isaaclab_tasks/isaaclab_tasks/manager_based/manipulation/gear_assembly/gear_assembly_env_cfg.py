@@ -24,7 +24,7 @@ from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import CameraCfg
 from isaaclab.sensors.frame_transformer.frame_transformer_cfg import FrameTransformerCfg, OffsetCfg
 from isaaclab.sim import PhysxCfg, SimulationCfg
-from isaaclab.sim.schemas.schemas_cfg import RigidBodyPropertiesCfg
+from isaaclab.sim.schemas.schemas_cfg import CollisionPropertiesCfg, RigidBodyPropertiesCfg
 from isaaclab.sim.spawners.from_files.from_files_cfg import GroundPlaneCfg, UsdFileCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
@@ -134,9 +134,31 @@ def _gear_rigid_props(kinematic: bool = False) -> RigidBodyPropertiesCfg:
         disable_gravity=False,
         kinematic_enabled=kinematic,
         solver_position_iteration_count=64,
-        solver_velocity_iteration_count=1,
+        solver_velocity_iteration_count=8,
         max_depenetration_velocity=5.0,
         max_contact_impulse=1e32,
+    )
+
+
+# Larger-than-default contact offsets on the gear shells so that any
+# approaching shape (gripper finger, another gear, the gear-base structure)
+# generates a contact constraint *before* the bodies overlap. This gives the
+# solver more substeps to ramp up the contact force, which prevents the
+# gripper from punching through the gear during a forceful insertion press
+# without raising ``max_depenetration_velocity`` (which would re-introduce
+# the gear-on-gear jitter we just fixed).
+#
+# - contact_offset = 5 mm  → contacts are generated up to 5 mm before overlap.
+#   For Factory gears whose teeth are ~3-4 mm thick this is generous but
+#   leaves no visible air gap because rest_offset stays small.
+# - rest_offset    = 0.5 mm → bodies sit ~0.5 mm apart "at rest". Small enough
+#   to be visually invisible; large enough that the gripper-gear contact
+#   stays in the well-conditioned regime where PhysX is stable.
+# - PhysX requires contact_offset >= 2 * rest_offset.
+def _gear_collision_props() -> CollisionPropertiesCfg:
+    return CollisionPropertiesCfg(
+        contact_offset=0.005,
+        rest_offset=0.0005,
     )
 
 
@@ -155,6 +177,7 @@ class GearAssemblySceneCfg(InteractiveSceneCfg):
             usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Factory/gear_assets/factory_gear_large/factory_gear_large.usd",
             activate_contact_sensors=True,
             rigid_props=_gear_rigid_props(kinematic=False),
+            collision_props=_gear_collision_props(),
         ),
     )
 
@@ -172,6 +195,7 @@ class GearAssemblySceneCfg(InteractiveSceneCfg):
             usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Factory/gear_assets/factory_gear_small/factory_gear_small.usd",
             activate_contact_sensors=False,
             rigid_props=_gear_rigid_props(kinematic=False),
+            collision_props=_gear_collision_props(),
         ),
     )
 
@@ -185,6 +209,7 @@ class GearAssemblySceneCfg(InteractiveSceneCfg):
             usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Factory/gear_assets/factory_gear_medium/factory_gear_medium.usd",
             activate_contact_sensors=False,
             rigid_props=_gear_rigid_props(kinematic=False),
+            collision_props=_gear_collision_props(),
         ),
     )
 
@@ -199,6 +224,7 @@ class GearAssemblySceneCfg(InteractiveSceneCfg):
             usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Factory/gear_assets/factory_gear_base/factory_gear_base.usd",
             activate_contact_sensors=True,
             rigid_props=_gear_rigid_props(kinematic=True),
+            collision_props=_gear_collision_props(),
         ),
     )
 
@@ -461,8 +487,8 @@ def bind_slippery_gear_material(
     env,
     env_ids,
     asset_names: list,
-    static_friction: float = 0.1,
-    dynamic_friction: float = 0.1,
+    static_friction: float = 0.05,
+    dynamic_friction: float = 0.05,
     restitution: float = 0.0,
 ):
     """Bind a low-friction physics material to the listed assets in every env.
@@ -554,8 +580,8 @@ class EventCfg:
         params={
             "asset_cfg": SceneEntityCfg("held_asset"),
             "pose_range": {
-                "x": (0.225, 0.36),
-                "y": (-0.275, -0.15),  # negative-Y side, away from gear base cluster
+                "x": (0.25, 0.36),
+                "y": (-0.275, -0.16),  # negative-Y side, away from gear base cluster
                 "z": (GEAR_HALF_HEIGHT, GEAR_HALF_HEIGHT),
                 "yaw": (-3.14159, 3.14159),
             },
