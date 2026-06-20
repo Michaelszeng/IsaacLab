@@ -3,11 +3,15 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
+import math
+import random
 from dataclasses import MISSING
 
 import numpy as np
+import torch
 
 import isaaclab.sim as sim_utils
+import isaaclab.utils.math as math_utils
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.managers import EventTermCfg as EventTerm
@@ -24,8 +28,6 @@ from isaaclab.sim.schemas.schemas_cfg import RigidBodyPropertiesCfg
 from isaaclab.sim.spawners.from_files.from_files_cfg import GroundPlaneCfg, UsdFileCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
-
-from isaaclab_tasks.manager_based.manipulation.stack.mdp.franka_stack_events import randomize_object_pose
 
 from . import mdp
 
@@ -378,6 +380,84 @@ class TerminationsCfg:
     )
 
 
+# Per-call counter used purely for the "[event N]" label below. Not behaviour
+# critical — just makes it easy to follow which reset a given log block came
+# from when scrolling back through a long log.
+_gear_event_counter = {"n": 0}
+
+
+def randomize_held_gear_about_center(
+    env,
+    env_ids,
+    asset_cfg: SceneEntityCfg,
+    pose_range: dict,
+    bore_local_offset: tuple = BORE_LOCAL_OFFSET,
+):
+    """Randomize the held gear so ``pose_range`` is interpreted in the gear's GEOMETRIC center.
+
+    The factory_gear_large USD has its root prim on the gear's rim — offset
+    from the bore (= visible center) by ``bore_local_offset`` in the gear's
+    local frame (default ~4.5 cm along local -X). The vanilla
+    ``randomize_object_pose`` writes the sampled position to the root, so any
+    yaw randomization swings the visible center along a circle of radius
+    ||bore_local_offset|| ≈ 4.5 cm — looks like the gear teleports.
+
+    This version samples a target *center* pose (x, y, z, yaw) and back-solves
+    the root translation that places the geometric center on the sample::
+
+        center_world = root_world + R(orient) @ bore_local_offset
+        =>  root_world = center_world − R(orient) @ bore_local_offset
+    """
+    if env_ids is None:
+        return
+    device = env.device
+    asset = env.scene[asset_cfg.name]
+
+    _gear_event_counter["n"] += 1
+    event_idx = _gear_event_counter["n"]
+    print(
+        f"[event {event_idx}] randomize_held_gear_about_center -> samples GEOMETRIC-CENTER pose"
+        f" from {pose_range}; compensating for bore offset {bore_local_offset}",
+        flush=True,
+    )
+
+    range_list = [pose_range.get(k, (0.0, 0.0)) for k in ["x", "y", "z", "roll", "pitch", "yaw"]]
+    bore_offset_t = torch.tensor(bore_local_offset, device=device, dtype=torch.float32).unsqueeze(0)  # (1, 3)
+
+    for cur_env in env_ids.tolist():
+        # Sample target center pose (env-relative).
+        sample_list = [random.uniform(r[0], r[1]) for r in range_list]
+        sample = torch.tensor([sample_list], device=device, dtype=torch.float32)
+        center_pos_env = sample[:, 0:3]  # (1, 3)
+        orient = math_utils.quat_from_euler_xyz(sample[:, 3], sample[:, 4], sample[:, 5])  # (1, 4)
+
+        cx, cy, cz, roll, pitch, yaw = sample_list
+        print(
+            f"    -> [env {cur_env}] sampled CENTER pose:"
+            f" xyz=({cx:.3f}, {cy:.3f}, {cz:.3f})"
+            f"  rpy=({roll:.3f}, {pitch:.3f}, {yaw:.3f})"
+            f"  (yaw {math.degrees(yaw):.1f}°)",
+            flush=True,
+        )
+
+        rotated_offset = math_utils.quat_apply(orient, bore_offset_t)  # (1, 3)
+        root_pos_env = center_pos_env - rotated_offset
+        root_pos_world = root_pos_env + env.scene.env_origins[cur_env : cur_env + 1, 0:3]
+
+        cur_env_t = torch.tensor([cur_env], device=device)
+        asset.write_root_pose_to_sim(torch.cat([root_pos_world, orient], dim=-1), env_ids=cur_env_t)
+        asset.write_root_velocity_to_sim(torch.zeros(1, 6, device=device), env_ids=cur_env_t)
+
+    # Read back the actual gear root pose after the write so the printed value
+    # matches what the rest of the env observes (env-relative).
+    pos = (asset.data.root_pos_w - env.scene.env_origins)[0]
+    print(
+        f"    -> gear pos after randomize_held_gear_about_center:"
+        f" ({pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f})",
+        flush=True,
+    )
+
+
 @configclass
 class EventCfg:
     # Resets all objects (including non-active gears) to their init_state positions.
@@ -393,19 +473,20 @@ class EventCfg:
         },
     )
 
-    # Randomise only the active (large) gear on the table surface.
+    # Randomise only the active (large) gear on the table surface. ``pose_range``
+    # here describes the gear's GEOMETRIC center (= bore axis), not the root prim
+    # — see ``randomize_held_gear_about_center`` for the offset compensation.
     randomize_gear_pose = EventTerm(
-        func=randomize_object_pose,
+        func=randomize_held_gear_about_center,
         mode="reset",
         params={
+            "asset_cfg": SceneEntityCfg("held_asset"),
             "pose_range": {
-                "x": (0.25, 0.45),
-                "y": (-0.30, -0.05),  # negative-Y side, away from gear base cluster
+                "x": (0.225, 0.36),
+                "y": (-0.275, -0.15),  # negative-Y side, away from gear base cluster
                 "z": (GEAR_HALF_HEIGHT, GEAR_HALF_HEIGHT),
                 "yaw": (-3.14159, 3.14159),
             },
-            "min_separation": 0.05,
-            "asset_cfgs": [SceneEntityCfg("held_asset")],
         },
     )
 
