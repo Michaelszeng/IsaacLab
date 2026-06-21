@@ -134,9 +134,18 @@ def _gear_rigid_props(kinematic: bool = False) -> RigidBodyPropertiesCfg:
         disable_gravity=False,
         kinematic_enabled=kinematic,
         solver_position_iteration_count=64,
-        solver_velocity_iteration_count=8,
-        max_depenetration_velocity=5.0,
+        solver_velocity_iteration_count=16,
+        max_depenetration_velocity=10.0,
         max_contact_impulse=1e32,
+        # Body-level viscous damping. Independent of contact direction, so it
+        # damps tangential/rotational gear motion (sliding or yaw oscillation
+        # in the gripper's grasp) that compliant-contact damping — which only
+        # acts in the contact normal direction — can't touch. ``angular_damping``
+        # is set higher because the observed oscillation is primarily rotational.
+        # Both are velocity-proportional drag, so a stationary held gear is
+        # unaffected.
+        linear_damping=0.5,
+        angular_damping=5.0,
     )
 
 
@@ -487,11 +496,13 @@ def bind_slippery_gear_material(
     env,
     env_ids,
     asset_names: list,
-    static_friction: float = 0.05,
-    dynamic_friction: float = 0.05,
+    static_friction: float = 0.01,
+    dynamic_friction: float = 0.01,
     restitution: float = 0.0,
+    compliant_contact_stiffness: float = 0.0,
+    compliant_contact_damping: float = 0.0,
 ):
-    """Bind a low-friction physics material to the listed assets in every env.
+    """Bind a low-friction (optionally compliant) physics material to the listed assets in every env.
 
     PhysX combines two contacting materials according to the higher-priority
     ``friction_combine_mode``. We use ``"max"``, which has the highest priority
@@ -503,6 +514,16 @@ def bind_slippery_gear_material(
         →  max(0.1, finger_friction) = finger_friction — grasp unaffected.
       * Gear vs. table (table uses "average", default friction)
         →  max(0.1, table_friction) = table_friction — table contact unaffected.
+
+    Setting ``compliant_contact_stiffness > 0`` switches the contact from a
+    rigid (infinite-stiffness) constraint to an implicit spring-damper. This
+    bounds the maximum possible penetration to ``finger_force / stiffness``,
+    which is the right tool for "the gripper sinks into the gear when the
+    gear is jammed against the medium gear and can't move" — i.e. a
+    quasi-static force balance that no number of solver iterations can fully
+    resolve under a rigid contact model. Compliance combines via *min*
+    across the contacting pair, so adding compliance only to the gear
+    material is enough; any contact involving the gear becomes compliant.
 
     The material prim is created once (lazily, under ``/World``) and reused for
     every binding, so this event is essentially free on subsequent calls.
@@ -522,12 +543,19 @@ def bind_slippery_gear_material(
             restitution=restitution,
             friction_combine_mode="max",
             restitution_combine_mode="max",
+            compliant_contact_stiffness=compliant_contact_stiffness,
+            compliant_contact_damping=compliant_contact_damping,
         )
         material_cfg.func(material_path, material_cfg)
+        compliance_tag = (
+            f", compliant(stiffness={compliant_contact_stiffness:g} N/m, damping={compliant_contact_damping:g} N·s/m)"
+            if compliant_contact_stiffness > 0
+            else ", rigid contact"
+        )
         print(
             f"[startup] created slippery gear material at {material_path}:"
             f" static={static_friction}, dynamic={dynamic_friction},"
-            f" restitution={restitution}, combine='max'",
+            f" restitution={restitution}, combine='max'{compliance_tag}",
             flush=True,
         )
 
@@ -555,6 +583,13 @@ class EventCfg:
             "static_friction": 0.05,
             "dynamic_friction": 0.05,
             "restitution": 0.1,
+            # Compliant contact: turns the gear surface into an implicit
+            # spring-damper instead of an infinite-stiffness constraint.
+            # Bounds max penetration to roughly  finger_force / stiffness,
+            # so the gripper can no longer sink into a gear that's jammed
+            # against the medium gear. See bind_slippery_gear_material docs.
+            "compliant_contact_stiffness": 2.0e6,  # N/m
+            "compliant_contact_damping": 1.0e4,  # N·s/m
         },
     )
 
@@ -580,8 +615,8 @@ class EventCfg:
         params={
             "asset_cfg": SceneEntityCfg("held_asset"),
             "pose_range": {
-                "x": (0.25, 0.36),
-                "y": (-0.275, -0.16),  # negative-Y side, away from gear base cluster
+                "x": (0.27, 0.36),
+                "y": (-0.275, -0.19),  # negative-Y side, away from gear base cluster
                 "z": (GEAR_HALF_HEIGHT, GEAR_HALF_HEIGHT),
                 "yaw": (-3.14159, 3.14159),
             },
@@ -620,17 +655,24 @@ class GearAssemblyEnvCfg(ManagerBasedRLEnvCfg):
         self.viewer.eye = (2.23, 1.0, 1.5)
         self.viewer.lookat = (0.5, 0.0, 0.3)
         self.sim = SimulationCfg(
-            dt=1 / 120,
+            dt=1 / 240,
             physx=PhysxCfg(
                 solver_type=1,
                 max_position_iteration_count=192,
-                max_velocity_iteration_count=1,
+                max_velocity_iteration_count=16,
                 bounce_threshold_velocity=0.2,
                 friction_offset_threshold=0.01,
                 friction_correlation_distance=0.00625,
                 gpu_max_rigid_contact_count=2**23,
                 gpu_max_rigid_patch_count=2**23,
                 gpu_max_num_partitions=1,
+                # Scene-level continuous collision detection. Adds a sweep pass
+                # in the broad-phase that prevents fast-moving thin contacts
+                # from tunneling in a single sub-step (e.g. a closing finger
+                # passing through a gear tooth). Per-body opt-in is not set
+                # here — if visual tunneling persists, add a startup event
+                # that sets PhysxRigidBodyAPI:enableCCD on the gears.
+                enable_ccd=True,
             ),
         )
         # Re-render a few frames after reset so the cameras settle (matches
