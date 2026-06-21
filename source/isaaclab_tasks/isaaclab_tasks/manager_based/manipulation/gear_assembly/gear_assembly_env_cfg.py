@@ -588,8 +588,8 @@ class EventCfg:
             # Bounds max penetration to roughly  finger_force / stiffness,
             # so the gripper can no longer sink into a gear that's jammed
             # against the medium gear. See bind_slippery_gear_material docs.
-            "compliant_contact_stiffness": 2.0e6,  # N/m
-            "compliant_contact_damping": 1.0e4,  # N·s/m
+            "compliant_contact_stiffness": 4.0e6,  # N/m
+            "compliant_contact_damping": 2.0e4,  # N·s/m
         },
     )
 
@@ -649,7 +649,7 @@ class GearAssemblyEnvCfg(ManagerBasedRLEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         self.episode_length_s = 60.0
-        self.decimation = 4
+        self.decimation = 8
         # Head-on view with 30° azimuth: camera at 2 m horizontal radius, 1.5 m
         # height, rotated 30° from directly in front of the workspace.
         self.viewer.eye = (2.23, 1.0, 1.5)
