@@ -551,37 +551,11 @@ def bind_slippery_gear_material(
     Registered in ``EventCfg`` with ``mode="startup"`` so it runs after assets
     spawn but before the first physics step.
     """
-    from pxr import Usd
-
     from isaaclab.sim.spawners.materials import RigidBodyMaterialCfg
     from isaaclab.sim.utils import bind_physics_material, get_current_stage
 
     material_path = "/World/Materials/SlipperyGearMaterial"
     stage = get_current_stage()
-
-    def _make_subtree_uninstanceable(root_path: str) -> int:
-        """Walk every prim under ``root_path`` and turn off USD instancing.
-
-        The Factory gear USDs ship with ``instanceable=True`` on the
-        ``visuals``/``collisions`` subprims (a Nucleus optimisation for
-        many-instance scenes). USD does not let you apply a material binding
-        — or any per-instance schema change — to an instance proxy, so
-        ``bind_physics_material`` below silently no-ops on every gear and
-        every env, leaving the gears on PhysX's default material
-        (friction=0.5, rigid). Uninstance the subtree first so the binding
-        actually lands on the real collider prims.
-
-        Must run *before* the first physics step (which is the case here:
-        this is a startup-mode event). Returns the number of prims switched
-        off, purely for the diagnostic print.
-        """
-        root_prim = stage.GetPrimAtPath(root_path)
-        n_changed = 0
-        for prim in Usd.PrimRange(root_prim):
-            if prim.IsInstanceable():
-                prim.SetInstanceable(False)
-                n_changed += 1
-        return n_changed
 
     if not stage.GetPrimAtPath(material_path).IsValid():
         material_cfg = RigidBodyMaterialCfg(
@@ -607,19 +581,13 @@ def bind_slippery_gear_material(
         )
 
     bound = 0
-    uninstanced = 0
     for asset_name in asset_names:
         asset = env.scene[asset_name]
         # Per-env instances live under /World/envs/env_N/<PrimName>.
         for prim_path in asset.root_physx_view.prim_paths:
-            uninstanced += _make_subtree_uninstanceable(prim_path)
             bind_physics_material(prim_path, material_path)
             bound += 1
-    print(
-        f"[startup] bound slippery material to {bound} asset instance(s)"
-        f" (uninstanced {uninstanced} subprims so the binding could land).",
-        flush=True,
-    )
+    print(f"[startup] bound slippery material to {bound} asset instance(s).", flush=True)
 
 
 @configclass
