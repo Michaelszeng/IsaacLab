@@ -672,6 +672,15 @@ class GearAssemblyEnvCfg(ManagerBasedRLEnvCfg):
                 bounce_threshold_velocity=0.2,
                 friction_offset_threshold=0.01,
                 friction_correlation_distance=0.00625,
+                # Per-step GPU scratch buffer for broad/narrow-phase contact
+                # work-items. Defaults to 2**26 (64 MB) in IsaacLab. With the
+                # small/medium gears spawning around the gear-base shafts, each
+                # env generates a burst of contact patches at t=0; at
+                # num_envs=16 the default budget overflows, contacts get
+                # silently dropped, and the depenetration solver launches the
+                # gears in the first 1-2 frames. The Factory deploy variant of
+                # this task sets the same override with the same justification.
+                gpu_collision_stack_size=2**28,
                 gpu_max_rigid_contact_count=2**23,
                 gpu_max_rigid_patch_count=2**23,
                 gpu_max_num_partitions=1,
