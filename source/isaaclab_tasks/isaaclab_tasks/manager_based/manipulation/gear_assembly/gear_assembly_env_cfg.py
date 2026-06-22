@@ -175,6 +175,15 @@ def _gear_collision_props() -> CollisionPropertiesCfg:
 class GearAssemblySceneCfg(InteractiveSceneCfg):
     """Scene: Franka, large gear (held_asset), small+medium parked at gear base, gear base (fixed_asset)."""
 
+    # USD-level material binding done in the ``apply_slippery_material`` startup event
+    # (see ``bind_slippery_gear_material``) is not picked up by PhysX once the scene
+    # has been replicated via ``cloner.replicate_physics(...)``. With replication on,
+    # envs 1..N-1 silently keep the default rigid + high-friction material on the
+    # gears, which causes spawn-time depenetration explosions and hyper-sensitive
+    # gripper-on-gear contact at num_envs>1. Disabling replication makes every env
+    # re-parse its own USD so the binding takes effect everywhere.
+    replicate_physics: bool = False
+
     robot: ArticulationCfg = MISSING
     ee_frame: FrameTransformerCfg = MISSING
 
