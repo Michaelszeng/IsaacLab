@@ -134,7 +134,15 @@ def _gear_rigid_props(kinematic: bool = False) -> RigidBodyPropertiesCfg:
         disable_gravity=False,
         kinematic_enabled=kinematic,
         solver_position_iteration_count=64,
-        solver_velocity_iteration_count=16,
+        # Kept low (≤4) to avoid the PhysX TGS "more than 4 velocity iterations"
+        # warning. Higher values caused over-applied impulse during rigid
+        # impulsive contact (e.g. large gear hitting the gear base on a
+        # misaligned insertion), launching the gear at multi-env. Position
+        # iterations (64) handle the contact-rich solving; velocity iterations
+        # are only for post-solve cleanup. The scene-level cap
+        # ``PhysxCfg.max_velocity_iteration_count`` stays at 16 so we don't
+        # re-introduce the earlier silent clamping bug.
+        solver_velocity_iteration_count=2,
         max_depenetration_velocity=10.0,
         max_contact_impulse=1e32,
         # Body-level viscous damping. Independent of contact direction, so it
@@ -543,11 +551,37 @@ def bind_slippery_gear_material(
     Registered in ``EventCfg`` with ``mode="startup"`` so it runs after assets
     spawn but before the first physics step.
     """
+    from pxr import Usd
+
     from isaaclab.sim.spawners.materials import RigidBodyMaterialCfg
     from isaaclab.sim.utils import bind_physics_material, get_current_stage
 
     material_path = "/World/Materials/SlipperyGearMaterial"
     stage = get_current_stage()
+
+    def _make_subtree_uninstanceable(root_path: str) -> int:
+        """Walk every prim under ``root_path`` and turn off USD instancing.
+
+        The Factory gear USDs ship with ``instanceable=True`` on the
+        ``visuals``/``collisions`` subprims (a Nucleus optimisation for
+        many-instance scenes). USD does not let you apply a material binding
+        — or any per-instance schema change — to an instance proxy, so
+        ``bind_physics_material`` below silently no-ops on every gear and
+        every env, leaving the gears on PhysX's default material
+        (friction=0.5, rigid). Uninstance the subtree first so the binding
+        actually lands on the real collider prims.
+
+        Must run *before* the first physics step (which is the case here:
+        this is a startup-mode event). Returns the number of prims switched
+        off, purely for the diagnostic print.
+        """
+        root_prim = stage.GetPrimAtPath(root_path)
+        n_changed = 0
+        for prim in Usd.PrimRange(root_prim):
+            if prim.IsInstanceable():
+                prim.SetInstanceable(False)
+                n_changed += 1
+        return n_changed
 
     if not stage.GetPrimAtPath(material_path).IsValid():
         material_cfg = RigidBodyMaterialCfg(
@@ -573,13 +607,19 @@ def bind_slippery_gear_material(
         )
 
     bound = 0
+    uninstanced = 0
     for asset_name in asset_names:
         asset = env.scene[asset_name]
         # Per-env instances live under /World/envs/env_N/<PrimName>.
         for prim_path in asset.root_physx_view.prim_paths:
+            uninstanced += _make_subtree_uninstanceable(prim_path)
             bind_physics_material(prim_path, material_path)
             bound += 1
-    print(f"[startup] bound slippery material to {bound} asset instance(s).", flush=True)
+    print(
+        f"[startup] bound slippery material to {bound} asset instance(s)"
+        f" (uninstanced {uninstanced} subprims so the binding could land).",
+        flush=True,
+    )
 
 
 @configclass
