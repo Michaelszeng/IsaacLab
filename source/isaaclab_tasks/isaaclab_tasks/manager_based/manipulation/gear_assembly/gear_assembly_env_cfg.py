@@ -492,13 +492,17 @@ def randomize_held_gear_about_center(
         asset.write_root_pose_to_sim(torch.cat([root_pos_world, orient], dim=-1), env_ids=cur_env_t)
         asset.write_root_velocity_to_sim(torch.zeros(1, 6, device=device), env_ids=cur_env_t)
 
-    # Read back the actual gear root pose after the write so the printed value
-    # matches what the rest of the env observes (env-relative).
-    pos = (asset.data.root_pos_w - env.scene.env_origins)[0]
-    print(
-        f"    -> gear pos after randomize_held_gear_about_center: ({pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f})",
-        flush=True,
-    )
+    # Read back the actual gear root pose after each write so the printed value
+    # matches what the rest of the env observes (env-relative). One line per
+    # randomized env.
+    pos_env = asset.data.root_pos_w - env.scene.env_origins
+    for cur_env in env_ids.tolist():
+        p = pos_env[cur_env]
+        print(
+            f"    -> [env {cur_env}] gear pos after randomize_held_gear_about_center:"
+            f" ({p[0]:.3f}, {p[1]:.3f}, {p[2]:.3f})",
+            flush=True,
+        )
 
 
 def bind_slippery_gear_material(
