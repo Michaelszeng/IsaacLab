@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --job-name=evaluate_pusht
 #SBATCH --account=locomotion
-#SBATCH --partition=vision-shared-titanrtx
-#SBATCH --exclude=freeman-titanrtx-2,freeman-titanrtx-1,gpu20-2.drl
+#SBATCH --partition=vision-shared-rtx3090
+#SBATCH --exclude=freeman-titanrtx-2,freeman-titanrtx-1,gpu20-2.drl,improbablex002
 #SBATCH --qos=shared-if-available
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
@@ -46,7 +46,7 @@ TASK="Isaac-GearAssembly-Franka-IK-Rel-Mimic-v0"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/isaac_sim/2_obs_gear_assembly_markovian_expert/checkpoints"
 
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/isaac_sim/2_obs_gear_assembly_human_expert_attention_double_enc/checkpoints"
-# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/isaac_sim/3_obs_gear_assembly_human_expert_attention_double_enc/checkpoints"
+CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/isaac_sim/3_obs_gear_assembly_human_expert_attention_double_enc/checkpoints"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/isaac_sim/4_obs_gear_assembly_human_expert_attention_double_enc/checkpoints"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/isaac_sim/5_obs_gear_assembly_human_expert_attention_double_enc/checkpoints"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/isaac_sim/6_obs_gear_assembly_human_expert_attention_double_enc/checkpoints"
@@ -61,7 +61,7 @@ TASK="Isaac-GearAssembly-Franka-IK-Rel-Mimic-v0"
 
 # Number of trials per (checkpoint, action_horizon) and parallel envs per round.
 N_ROLLOUTS=500
-N_ENVS=16
+N_ENVS=8
 
 # Number of trials per (checkpoint, action_horizon) to save MP4 videos for.
 # 0 = off, -1 = all. Anything > 0 forces video recording (a bit slower).
