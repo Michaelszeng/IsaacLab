@@ -134,7 +134,7 @@ def _gear_rigid_props(kinematic: bool = False) -> RigidBodyPropertiesCfg:
         disable_gravity=False,
         kinematic_enabled=kinematic,
         solver_position_iteration_count=64,
-        solver_velocity_iteration_count=16,
+        solver_velocity_iteration_count=2,
         max_depenetration_velocity=10.0,
         max_contact_impulse=1e32,
         # Body-level viscous damping. Independent of contact direction, so it
@@ -659,7 +659,7 @@ class GearAssemblyEnvCfg(ManagerBasedRLEnvCfg):
             physx=PhysxCfg(
                 solver_type=1,
                 max_position_iteration_count=192,
-                max_velocity_iteration_count=16,
+                max_velocity_iteration_count=2,
                 bounce_threshold_velocity=0.2,
                 friction_offset_threshold=0.01,
                 friction_correlation_distance=0.00625,
