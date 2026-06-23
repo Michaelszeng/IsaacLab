@@ -1,5 +1,14 @@
 *.usd filter=lfs diff=lfs merge=lfs -text
 *.usda filter=lfs diff=lfs merge=lfs -text
+
+# Exception: the gear-assembly task's local copies of the Factory gear USDs
+# are small (~1.2 MB total) and we want them in plain git, not LFS, so that
+# machines without git-lfs (SLURM compute nodes) can clone and use them
+# directly without a separate `git lfs pull` step. Without this override
+# they get replaced with 131-byte LFS pointer stubs at checkout, which
+# Isaac Sim happily loads as USDs with no geometry -- the gear ends up
+# bore-less and refuses to slide onto the shaft.
+source/isaaclab_tasks/isaaclab_tasks/manager_based/manipulation/gear_assembly/assets/*.usd -filter -diff -merge binary
 *.psd filter=lfs diff=lfs merge=lfs -text
 *.hdr filter=lfs diff=lfs merge=lfs -text
 *.dae filter=lfs diff=lfs merge=lfs -text
