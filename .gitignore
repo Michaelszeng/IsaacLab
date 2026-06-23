@@ -16,6 +16,13 @@ env
 **/*.usdc
 **/*.usdz
 
+# Exception: the gear-assembly task needs non-instanceable copies of the four
+# Factory gear USDs so that the slippery+compliant material binding actually
+# lands on the colliders (USD won't bind on instance proxies). These are
+# generated once by scripts/tools/make_gear_usds_uninstanceable.py and must
+# travel with the repo so SLURM jobs don't need to re-run the generator.
+!source/isaaclab_tasks/isaaclab_tasks/manager_based/manipulation/gear_assembly/assets/*.usd
+
 # Python
 .DS_Store
 **/*.egg-info/
