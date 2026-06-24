@@ -492,104 +492,144 @@ def randomize_held_gear_about_center(
     )
 
 
-def bind_slippery_gear_material(
+def set_gear_physics_properties(
     env,
     env_ids,
     asset_names: list,
-    static_friction: float = 0.01,
-    dynamic_friction: float = 0.01,
-    restitution: float = 0.0,
-    compliant_contact_stiffness: float = 0.0,
-    compliant_contact_damping: float = 0.0,
+    static_friction: float = 0.05,
+    dynamic_friction: float = 0.05,
+    restitution: float = 0.1,
+    mass_scale: dict | None = None,
+    compensate_finger_friction: bool = True,
+    robot_name: str = "robot",
+    finger_body_regex: str = "panda_.*finger.*",
+    default_scene_friction: float = 0.5,
 ):
-    """Bind a low-friction (optionally compliant) physics material to the listed assets in every env.
+    """Set per-shape friction/restitution/mass on the gears via the PhysX tensor view, bypassing USD entirely.
 
-    PhysX combines two contacting materials according to the higher-priority
-    ``friction_combine_mode``. We use ``"max"``, which has the highest priority
-    over the default ``"average"`` used by the Franka and the table. Net effect:
+    USD ``bind_physics_material`` cannot reach the collision geometry of
+    ``factory_gear_*`` / ``panda_instanceable`` assets: their collision meshes
+    are marked ``instanceable`` in the source USD, so the only prims the USD
+    importer exposes for them are read-only instance proxies — there is no
+    per-instance prim to attach a material *relationship* to. This is why
+    every prior run logged "WARNING: Could not perform 'bind_physics_material'
+    on any prims...": the bind always failed, silently, and every body in the
+    scene (gears, fingers, table) ran on PhysX's scene-default material the
+    whole time (static=0.5, dynamic=0.5, restitution=0.0, combine="average").
 
-      * Two gears in contact (both use this material) →  max(0.1, 0.1) = 0.1
-        — slippery, no jamming on tooth-on-tooth.
-      * Gear vs. gripper finger (finger uses "average", high friction)
-        →  max(0.1, finger_friction) = finger_friction — grasp unaffected.
-      * Gear vs. table (table uses "average", default friction)
-        →  max(0.1, table_friction) = table_friction — table contact unaffected.
+    This function writes friction/restitution/mass straight into the PhysX
+    tensor buffers instead, via ``root_physx_view.set_material_properties`` /
+    ``set_masses`` / ``set_inertias`` — the same mechanism used by IsaacLab's
+    own ``randomize_rigid_body_material`` / ``randomize_rigid_body_mass``
+    event terms (see ``isaaclab.envs.mdp.events``). This is unaffected by
+    instancing, and the values can be read back at any time with
+    ``get_material_properties`` / ``get_masses`` to verify what was applied.
 
-    Setting ``compliant_contact_stiffness > 0`` switches the contact from a
-    rigid (infinite-stiffness) constraint to an implicit spring-damper. This
-    bounds the maximum possible penetration to ``finger_force / stiffness``,
-    which is the right tool for "the gripper sinks into the gear when the
-    gear is jammed against the medium gear and can't move" — i.e. a
-    quasi-static force balance that no number of solver iterations can fully
-    resolve under a rigid contact model. Compliance combines via *min*
-    across the contacting pair, so adding compliance only to the gear
-    material is enough; any contact involving the gear becomes compliant.
+    .. note::
+        This sets absolute friction values but not the PhysX "combine mode"
+        (e.g. the previous design's "max") — that is a material-*prim*
+        attribute only reachable through the same broken bind path. Under the
+        engine's default "average" combine: gear-on-gear contact is exactly
+        ``static_friction``/``dynamic_friction`` (averaging two equal values
+        is a no-op), but gear-vs-other contact dilutes towards
+        ``default_scene_friction``. If ``compensate_finger_friction`` is True,
+        the Franka finger links' friction is also raised via the same tensor
+        mechanism so that, after averaging with the gear's low friction, the
+        *effective* gear-finger friction is unchanged — keeping the grasp
+        unaffected. The table is a purely static collider (no
+        ``RigidBodyAPI``), so it has no PhysX tensor view at all; gear-vs-table
+        friction can't be compensated this way and will be
+        ``(static_friction + default_scene_friction) / 2``.
 
-    The material prim is created once (lazily, under ``/World``) and reused for
-    every binding, so this event is essentially free on subsequent calls.
-    Registered in ``EventCfg`` with ``mode="startup"`` so it runs after assets
-    spawn but before the first physics step.
+    .. note::
+        Compliant contact (stiffness/damping) is *not* exposed by the PhysX
+        tensor API (confirmed via isaac-sim/IsaacLab issues #4706 and #2281)
+        — it can only be set by binding a USD material, so it remains
+        unavailable here until ``instanceable`` is removed from the gear/robot
+        collision geometry (requires editing local copies of the USD files).
     """
-    from isaaclab.sim.spawners.materials import RigidBodyMaterialCfg
-    from isaaclab.sim.utils import bind_physics_material, get_current_stage
+    num_envs = env.scene.num_envs
+    all_env_ids = torch.arange(num_envs, device="cpu")
 
-    material_path = "/World/Materials/SlipperyGearMaterial"
-    stage = get_current_stage()
-
-    if not stage.GetPrimAtPath(material_path).IsValid():
-        material_cfg = RigidBodyMaterialCfg(
-            static_friction=static_friction,
-            dynamic_friction=dynamic_friction,
-            restitution=restitution,
-            friction_combine_mode="max",
-            restitution_combine_mode="max",
-            compliant_contact_stiffness=compliant_contact_stiffness,
-            compliant_contact_damping=compliant_contact_damping,
-        )
-        material_cfg.func(material_path, material_cfg)
-        compliance_tag = (
-            f", compliant(stiffness={compliant_contact_stiffness:g} N/m, damping={compliant_contact_damping:g} N·s/m)"
-            if compliant_contact_stiffness > 0
-            else ", rigid contact"
-        )
+    for asset_name in asset_names:
+        asset = env.scene[asset_name]
+        materials = asset.root_physx_view.get_material_properties()
+        materials[..., 0] = static_friction
+        materials[..., 1] = dynamic_friction
+        materials[..., 2] = restitution
+        asset.root_physx_view.set_material_properties(materials, all_env_ids)
         print(
-            f"[startup] created slippery gear material at {material_path}:"
-            f" static={static_friction}, dynamic={dynamic_friction},"
-            f" restitution={restitution}, combine='max'{compliance_tag}",
+            f"[startup] set {asset_name} friction: static={static_friction}, dynamic={dynamic_friction},"
+            f" restitution={restitution}",
             flush=True,
         )
 
-    bound = 0
-    for asset_name in asset_names:
-        asset = env.scene[asset_name]
-        # Per-env instances live under /World/envs/env_N/<PrimName>.
-        for prim_path in asset.root_physx_view.prim_paths:
-            bind_physics_material(prim_path, material_path)
-            bound += 1
-    print(f"[startup] bound slippery material to {bound} asset instance(s).", flush=True)
+        if mass_scale is not None and asset_name in mass_scale:
+            scale = mass_scale[asset_name]
+            masses = asset.root_physx_view.get_masses()
+            inertias = asset.root_physx_view.get_inertias()
+            default_mass = masses[0].item()
+            masses *= scale
+            inertias *= scale
+            asset.root_physx_view.set_masses(masses, all_env_ids)
+            asset.root_physx_view.set_inertias(inertias, all_env_ids)
+            print(
+                f"[startup] scaled {asset_name} mass by {scale}x: {default_mass:.4f} kg -> "
+                f"{default_mass * scale:.4f} kg",
+                flush=True,
+            )
+
+    if compensate_finger_friction:
+        robot = env.scene[robot_name]
+        body_ids, body_names = robot.find_bodies(finger_body_regex)
+        if not body_ids:
+            raise ValueError(
+                f"set_gear_physics_properties: no robot bodies matched '{finger_body_regex}' for"
+                " finger-friction compensation."
+            )
+        # Map body index -> shape index range, mirroring the workaround in
+        # isaaclab.envs.mdp.events.randomize_rigid_body_material (Articulation
+        # does not expose a direct body->shape mapping).
+        num_shapes_per_body = []
+        for link_path in robot.root_physx_view.link_paths[0]:
+            link_view = robot._physics_sim_view.create_rigid_body_view(link_path)
+            num_shapes_per_body.append(link_view.max_shapes)
+
+        compensated_static = 2 * default_scene_friction - static_friction
+        compensated_dynamic = 2 * default_scene_friction - dynamic_friction
+        materials = robot.root_physx_view.get_material_properties()
+        for body_id in body_ids:
+            start_idx = sum(num_shapes_per_body[:body_id])
+            end_idx = start_idx + num_shapes_per_body[body_id]
+            materials[:, start_idx:end_idx, 0] = compensated_static
+            materials[:, start_idx:end_idx, 1] = compensated_dynamic
+        robot.root_physx_view.set_material_properties(materials, all_env_ids)
+        print(
+            f"[startup] compensated finger friction ({body_names}) to static={compensated_static:.3f},"
+            f" dynamic={compensated_dynamic:.3f} so gear contact averages back to {default_scene_friction}",
+            flush=True,
+        )
 
 
 @configclass
 class EventCfg:
-    # One-shot: install a low-friction physics material on all gear bodies (and
-    # the gear base) so gear-on-gear contact is slippery while gear-on-gripper
-    # and gear-on-table contacts are unaffected. See
-    # ``bind_slippery_gear_material`` for the combine-mode trick.
-    apply_slippery_material = EventTerm(
-        func=bind_slippery_gear_material,
+    # One-shot: set low friction directly via the PhysX tensor view on all gear
+    # bodies (and the gear base) so gear-on-gear contact is slippery, while
+    # compensating the Franka finger friction so gear-on-gripper contact is
+    # unaffected. See ``set_gear_physics_properties`` for why this bypasses
+    # USD material binding (which silently fails on these instanced assets)
+    # and for the gear-on-table caveat. Scale per-asset mass relative to its
+    # default (USD-baked) value via ``mass_scale``, e.g. {"held_asset": 2.0}
+    # doubles the large gear's mass — default below doubles it.
+    apply_gear_physics_properties = EventTerm(
+        func=set_gear_physics_properties,
         mode="startup",
         params={
             "asset_names": ["held_asset", "gear_small", "gear_medium", "fixed_asset"],
-            "static_friction": 0.05,
-            "dynamic_friction": 0.05,
+            "static_friction": 0.075,
+            "dynamic_friction": 0.075,
             "restitution": 0.1,
-            # Compliant contact: turns the gear surface into an implicit
-            # spring-damper instead of an infinite-stiffness constraint.
-            # Bounds max penetration to roughly  finger_force / stiffness,
-            # so the gripper can no longer sink into a gear that's jammed
-            # against the medium gear. See bind_slippery_gear_material docs.
-            "compliant_contact_stiffness": 4.0e6,  # N/m
-            "compliant_contact_damping": 2.0e4,  # N·s/m
+            "mass_scale": {"held_asset": 1.0},
         },
     )
 
