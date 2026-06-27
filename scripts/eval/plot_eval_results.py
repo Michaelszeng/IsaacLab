@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import math
 import pickle
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -91,13 +92,22 @@ class CheckpointResult:
 
 def _load_results_pkl(results_path: Path) -> Tuple[float, int]:
     """Return (success_rate, num_trials) from a results.pkl file."""
-    with results_path.open("rb") as f:
-        data = pickle.load(f)
+    try:
+        with results_path.open("rb") as f:
+            data = pickle.load(f)
+    except Exception as exc:  # noqa: BLE001 - any read/unpickle failure should be skipped
+        print(f"Warning: failed to read '{results_path}': {exc}. Skipping.")
+        return float("nan"), 0
     n_total = data.get("n_total", 0)
     n_success = data.get("n_success", 0)
     if n_total == 0:
         return float("nan"), 0
     return n_success / n_total, n_total
+
+
+def _is_checkpoint_dir(dirname: str) -> bool:
+    """Return True if the directory name matches the format ``epoch=<digits>*``."""
+    return re.match(r"^epoch=\d+", dirname) is not None
 
 
 def _parse_horizon(dirname: str) -> Optional[int]:
@@ -116,12 +126,13 @@ def collect_best_results(experiment_path: Path) -> List[CheckpointResult]:
     Directory layout: ``<experiment_path>/<checkpoint_stem>/ah<N>/results.pkl``.
     """
     if not experiment_path.exists():
-        raise FileNotFoundError(f"Experiment path '{experiment_path}' does not exist.")
+        print(f"Warning: experiment path '{experiment_path}' does not exist. Skipping.")
+        return []
 
     # Group results by horizon across all checkpoints.
     by_horizon: Dict[int, List[CheckpointResult]] = {}
     for ckpt_dir in sorted(experiment_path.iterdir()):
-        if not ckpt_dir.is_dir():
+        if not ckpt_dir.is_dir() or not _is_checkpoint_dir(ckpt_dir.name):
             continue
         for horizon_dir in sorted(ckpt_dir.iterdir()):
             if not horizon_dir.is_dir():
@@ -162,11 +173,12 @@ def collect_all_checkpoint_results(experiment_path: Path) -> Dict[str, List[Chec
     Directory layout: ``<experiment_path>/<checkpoint_stem>/ah<N>/results.pkl``.
     """
     if not experiment_path.exists():
-        raise FileNotFoundError(f"Experiment path '{experiment_path}' does not exist.")
+        print(f"Warning: experiment path '{experiment_path}' does not exist. Skipping.")
+        return {}
 
     by_ckpt: Dict[str, List[CheckpointResult]] = {}
     for ckpt_dir in sorted(experiment_path.iterdir()):
-        if not ckpt_dir.is_dir():
+        if not ckpt_dir.is_dir() or not _is_checkpoint_dir(ckpt_dir.name):
             continue
         for horizon_dir in sorted(ckpt_dir.iterdir()):
             if not horizon_dir.is_dir():
