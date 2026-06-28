@@ -655,8 +655,8 @@ class EventCfg:
         params={
             "asset_cfg": SceneEntityCfg("held_asset"),
             "pose_range": {
-                "x": (0.27, 0.36),
-                "y": (-0.275, -0.19),  # negative-Y side, away from gear base cluster
+                "x": (0.28, 0.36),
+                "y": (-0.275, -0.205),  # negative-Y side, away from gear base cluster
                 "z": (GEAR_HALF_HEIGHT, GEAR_HALF_HEIGHT),
                 "yaw": (-3.14159, 3.14159),
             },
