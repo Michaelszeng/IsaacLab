@@ -262,6 +262,14 @@ def create_environment_config(
         if not args_cli.enable_cameras:
             env_cfg = remove_camera_configs(env_cfg)
         env_cfg.sim.render.antialiasing_mode = "DLSS"
+    else:
+        env_cfg.sim.render.antialiasing_mode = "None"
+        # env_cfg.sim.render.rendering_mode = "performance"
+
+    # Render once per env.step instead of every physics substep. Without this,
+    # at dt=1/240 with decimation=8 the renderer fires 8x per step, which can
+    # TDR-crash the GPU when several cameras/viewports are active.
+    env_cfg.sim.render_interval = env_cfg.decimation // 4
 
     # modify configuration such that the environment runs indefinitely until
     # the goal is reached or other termination conditions are met
@@ -609,17 +617,17 @@ def run_simulation_loop(
     keyboard_interface.add_callback("P", print_camera_view)
     keyboard_interface.add_callback("N", mark_success_and_advance)
 
+    sep = "─" * 52
     print(
-        "\n"
-        "─" * 52 + "\n"
+        f"\n{sep}\n"
         " Keyboard shortcuts\n"
-        "─" * 52 + "\n"
+        f"{sep}\n"
         "  R        Reset / discard current episode\n"
         "  N        Mark current episode as SUCCESS and save\n"
         "  V        Cycle through preset camera views\n"
         "  P        Print current camera position (for presets)\n"
         "  Ctrl+C   Quit\n"
-        "─" * 52 + "\n"
+        f"{sep}\n"
     )
 
     # Reset before starting
@@ -635,8 +643,7 @@ def run_simulation_loop(
                 f" ({session_count} this session, {existing_demo_count} pre-existing)."
             )
         return (
-            f"Recorded {total} total demonstrations"
-            f" ({session_count} this session, {existing_demo_count} pre-existing)."
+            f"Recorded {total} total demonstrations ({session_count} this session, {existing_demo_count} pre-existing)."
         )
 
     label_text = _format_label(current_recorded_demo_count)
