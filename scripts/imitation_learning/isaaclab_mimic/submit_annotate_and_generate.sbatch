@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --job-name=isaaclab_mimic_annotate_and_generate
 #SBATCH --account=locomotion
-#SBATCH --partition=vision-shared-titanrtx
-#SBATCH --exclude=freeman-titanrtx-2,freeman-titanrtx-1,gpu20-2.drl
+#SBATCH --partition=vision-shared-rtx3090
+#SBATCH --exclude=freeman-titanrtx-2,freeman-titanrtx-1,gpu20-2.drl,improbablex002
 #SBATCH --qos=shared-if-available
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
@@ -32,7 +32,7 @@ TASK_ID="Isaac-GearAssembly-Franka-IK-Rel-Mimic-v0"
 # Input source / annotated / generated HDF5 paths.
 SOURCE_HDF5="./datasets/gear_assembly_source.hdf5"
 ANNOTATED_HDF5="./datasets/gear_assembly_annotated.hdf5"
-GENERATED_HDF5="./datasets/gear_assembly_generated_750.hdf5"
+GENERATED_HDF5="./datasets/gear_assembly_generated_900.hdf5"
 
 # Zarr output paths (derived from the HDF5 paths above).
 SOURCE_ZARR="${SOURCE_HDF5%.hdf5}.zarr"
@@ -45,10 +45,10 @@ GRASP_BOUNDS="--grasp_action_bounds 0 80"
 # GRASP_BOUNDS=""
 
 # Set to 1 to skip the annotation step (e.g. if *_annotated.hdf5 already exists).
-SKIP_ANNOTATION=1
+SKIP_ANNOTATION=0
 
 # Total demos to generate and parallel envs per round.
-NUM_DEMOS=750
+NUM_DEMOS=900
 NUM_ENVS=16
 # ============================================================================
 

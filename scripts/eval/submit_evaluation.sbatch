@@ -43,21 +43,21 @@ TASK="Isaac-GearAssembly-Franka-IK-Rel-Mimic-v0"
 
 # Directory containing one or more .ckpt files. The corresponding normalizer.pt is expected one level up.
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/isaac_sim/2_obs_gear_assembly_human_expert/checkpoints"
-CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/isaac_sim/2_obs_gear_assembly_markovian_expert/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/isaac_sim/2_obs_gear_assembly_markovian_expert/checkpoints"
 
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/isaac_sim/2_obs_gear_assembly_human_expert_attention_double_enc/checkpoints"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/isaac_sim/3_obs_gear_assembly_human_expert_attention_double_enc/checkpoints"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/isaac_sim/4_obs_gear_assembly_human_expert_attention_double_enc/checkpoints"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/isaac_sim/5_obs_gear_assembly_human_expert_attention_double_enc/checkpoints"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/isaac_sim/6_obs_gear_assembly_human_expert_attention_double_enc/checkpoints"
-# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/isaac_sim/8_obs_gear_assembly_human_expert_attention_double_enc/checkpoints"
-# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/isaac_sim/12_obs_gear_assembly_human_expert_attention_double_enc/checkpoints"
+CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/isaac_sim/8_obs_gear_assembly_human_expert_attention_double_enc/checkpoints"
 
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/isaac_sim/2_obs_gear_assembly_human_expert_attention_double_enc_1000_demos/checkpoints"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/isaac_sim/3_obs_gear_assembly_human_expert_attention_double_enc_1000_demos/checkpoints"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/isaac_sim/4_obs_gear_assembly_human_expert_attention_double_enc_1000_demos/checkpoints"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/isaac_sim/5_obs_gear_assembly_human_expert_attention_double_enc_1000_demos/checkpoints"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/isaac_sim/6_obs_gear_assembly_human_expert_attention_double_enc_1000_demos/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/isaac_sim/8_obs_gear_assembly_human_expert_attention_double_enc_1000_demos/checkpoints"
 
 # Number of trials per (checkpoint, action_horizon) and parallel envs per round.
 N_ROLLOUTS=500
