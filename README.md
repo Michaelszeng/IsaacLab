@@ -1,105 +1,35 @@
-![Isaac Lab](docs/source/_static/isaaclab.jpg)
+# Isaac Lab
 
-# Michael's Notes
+This repo is a fork of [Issac Lab](https://github.com/isaac-sim/IsaacLab). 
+
+This fork contains the following additions to Isaac Lab:
+ - Gear Insertion Environment and MimicGen data generation pipeline used in [Revisiting Open-Loop Execution in Robotics: Toward Reactive, Higher-Performance Policie]().
+ - Markovian scripted policy for automated data generation for Gear Insertion.
 
 ## Installation
+
+Firstly, follow the official Isaac Lab installation instructions and [documentation page](https://isaac-sim.github.io/IsaacLab):
+
+- [Installation steps](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html#local-installation)
+- [Reinforcement learning](https://isaac-sim.github.io/IsaacLab/main/source/overview/reinforcement-learning/rl_existing_scripts.html)
+- [Tutorials](https://isaac-sim.github.io/IsaacLab/main/source/tutorials/index.html)
+- [Available environments](https://isaac-sim.github.io/IsaacLab/main/source/overview/environments.html)
+
+
+Additional `pip` installs:
 
 ```bash
 pip install PyQt5 zarr numcodecs
 ```
 
-For policy evaluation, clone my [diffusion policy repo](https://github.com/Michaelszeng/diffusion-policy-experiments) and install (along with required dependencies):
-```bash
-pip install -e /home/michzeng/diffusion-policy --no-deps
-pip install dill==0.3.5.1 accelerate==0.13.2 diffusers==0.11.1
-pip install hydra-core==1.2.0 "zarr<3" "numcodecs>=0.11.0" "numba>=0.61.0" deprecated
-pip install imageio==2.22.0 imageio-ffmpeg==0.4.7 "opencv-python>=4.5.0"
-pip install einops==0.4.1
-# diffusers 0.11.1 imports HfFolder/cached_download (hf_hub <0.27); transformers ≥4.45 requires hf_hub ≥0.30,
-# so we install transformers 4.40-4.44 (compatible with hf_hub 0.23.2+) together to avoid pip re-resolving:
-pip install "transformers>=4.40,<4.45" "huggingface-hub==0.25.2"
-pip install "r3m @ https://github.com/facebookresearch/r3m/archive/b2334e726887fa0206962d7984c69c5fb09cceab.tar.gz"
-# IsaacSim 5.1's omni.syntheticdata has a known NumPy 2.x bug (camera annotator dtype error);
-# pin to NumPy 1.x. numba ≥0.61 still supports this (numpy 1.24-2.1 range).
-pip install "numpy<2"
-```
+Specific instructions for installing on a SLURM cluster (such as MIT CSAIL SLURM) are in `SLURM_README.md`.
 
-### Installation on CSAIL SLURM Cluster
 
-```bash
-# 1. Conda env with the Vulkan loader (required for RTX cameras).
-source /data/locomotion/michzeng/miniconda3/etc/profile.d/conda.sh
-conda create -p /data/locomotion/michzeng/conda_envs/IsaacLab \
-  -c conda-forge --override-channels --strict-channel-priority \
-  python=3.11 pip libvulkan-loader vulkan-tools
-conda activate /data/locomotion/michzeng/conda_envs/IsaacLab
+## Teleop + MimicGen Data Collection Pipeline
 
-# 2. PyTorch matched to the cluster's CUDA build.
-#    Tedrake H200 nodes ship driver 575.57 → CUDA 12.9 → cu129.
-#    The cu129 index only has torch ≥ 2.8; pick a 2.9.x build.
-#    (For older drivers: cu124 with torch 2.4-2.5, cu121 with torch 2.3-2.5.)
-pip install --index-url https://download.pytorch.org/whl/cu129 torch==2.9.1 torchvision==0.24.1
+NOTE: while the MimicGen data generation pipeline can generate many more demonstrations, they replayed/stitched versions of the original source demos (see [MimicGen](https://mimicgen.github.io/)). Make sure to collect enough source demos so your dataset has sufficient variety.
 
-# 3. IsaacSim 5.1 from NVIDIA's PyPI
-pip install --upgrade pip
-pip install 'isaacsim[all,extscache]==5.1.0' --extra-index-url https://pypi.nvidia.com
-
-# 4. Clone IsaacLab fork and install its editable extensions.
-git clone https://github.com/Michaelszeng/IsaacLab.git /data/locomotion/michzeng/IsaacLab
-cd /data/locomotion/michzeng/IsaacLab
-./isaaclab.sh --install
-
-# 5. Smoke test on a GPU node (e.g. via `srun --gres=gpu:1 --pty bash`).
-./isaaclab.sh -p scripts/tutorials/00_sim/launch_app.py --headless
-vulkaninfo --summary | head -20   # should list the H200 — if not, fix Vulkan ICD below.
-
-# 6. Policy evaluation dependencies (required for evaluate_model_custom.py).
-pip install dill==0.3.5.1 accelerate==0.13.2 diffusers==0.11.1
-pip install hydra-core==1.2.0 "zarr<3" "numcodecs>=0.11.0" "numba>=0.61.0" deprecated
-pip install imageio==2.22.0 imageio-ffmpeg==0.4.7 "opencv-python>=4.5.0"
-pip install einops==0.4.1
-# diffusers 0.11.1 imports HfFolder/cached_download (hf_hub <0.27); transformers ≥4.45 requires hf_hub ≥0.30,
-# so we install transformers 4.40-4.44 (compatible with hf_hub 0.23.2+) together to avoid pip re-resolving:
-pip install "transformers>=4.40,<4.45" "huggingface-hub==0.25.2"
-# IsaacSim 5.1's omni.syntheticdata has a known NumPy 2.x bug (camera annotator dtype error);
-# pin to NumPy 1.x. numba ≥0.61 still supports this (numpy 1.24-2.1 range).
-pip install "numpy<2"
-pip install PyQt5
-# R3M visual encoder for image-based checkpoints
-pip install "r3m @ https://github.com/facebookresearch/r3m/archive/b2334e726887fa0206962d7984c69c5fb09cceab.tar.gz"
-# Install the diffusion policy package from the cluster copy:
-pip install -e /data/locomotion/michzeng/diffusion-policy-experiments --no-deps
-pip install statsmodels
-```
-
-Notes:
-- **Vulkan ICD fix** (only if step 5 fails to find the GPU): add `export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json` to `~/.bashrc` or your SLURM preamble.
-- **Sync local changes** to the cluster (excluding the local conda env and datasets):
-  ```bash
-  rsync -av --exclude=env --exclude=datasets \
-    /home/michzeng/IsaacLab/ tedrake-h200-1:/data/locomotion/michzeng/IsaacLab/
-  ```
-- **Scale `--num_envs` up** for generation on the cluster — H200 has 143 GB VRAM, so 32-128 parallel envs is realistic (vs the 1-env limit on a local 2080 Ti).
-
-Batch-submit a generation job (no interactive shell needed):
-```bash
-sbatch --gres=gpu:1 --time=4:00:00 --wrap="
-  cd /data/locomotion/michzeng/IsaacLab && \
-  source /data/locomotion/michzeng/miniconda3/etc/profile.d/conda.sh && \
-  conda activate /data/locomotion/michzeng/conda_envs/IsaacLab && \
-  python scripts/imitation_learning/isaaclab_mimic/generate_dataset.py \
-    --task Isaac-GearAssembly-Franka-IK-Rel-Mimic-v0 \
-    --input_file ./datasets/gear_assembly_annotated.hdf5 \
-    --output_file ./datasets/gear_assembly_generated.hdf5 \
-    --generation_num_trials 1000 \
-    --num_envs 32 \
-    --enable_cameras --headless
-"
-```
-
-## Data collection pipeline
-
-Step 1 — Record ~10 source demos (SpaceMouse):
+Step 1 — Record source demos (using a 3Dconnexion SpaceMouse Wireless 3DX-700043):
 
 ```bash
 python scripts/tools/record_demos.py \
@@ -117,7 +47,7 @@ python scripts/tools/record_demos.py \
   --num_demos 50
 ```
 
-Visualize data utility:
+Optionally, use this utility script to visualize your collected data:
 
 ```bash
 python scripts/tools/visualize_dataset.py ./datasets/insertion_source.hdf5
@@ -143,10 +73,7 @@ python scripts/imitation_learning/isaaclab_mimic/annotate_demos.py \
   --auto \
   --enable_cameras \
   --headless \
-  --grasp_action_bounds 0 80
 ```
-
-`--auto` uses the peg_grasped signal to find the grasp→insert boundary automatically.
 
 Inspect the auto-generated boundaries using:
 
@@ -156,7 +83,7 @@ python scripts/tools/inspect_annotations.py ./datasets/insertion_source.hdf5
 python scripts/tools/inspect_annotations.py ./datasets/gear_assembly_annotated.hdf5
 ```
 
-Filter out bad episodes using:
+Filter out badly-annotated episodes using:
 
 ```bash
 python scripts/tools/filter_demos.py \
@@ -174,7 +101,7 @@ python scripts/tools/filter_demos.py \
     --dry-run
 ```
 
-Or, filter out a specific episode using (where `N` is zero-indexed): 
+Or, filter out a specific episode using (where `demo_N` is zero-indexed): 
 
 ```bash
 python scripts/tools/filter_demos.py \
@@ -226,150 +153,83 @@ python scripts/tools/hdf5_to_zarr.py \
   /home/michzeng/diffusion-policy/data/diffusion_experiments/isaac_sim/gear_assembly_generated.zarr
 ```
 
-Produces the standard diffusion-policy layout: every per-step obs becomes a flat `data/<key>` array (cameras at source resolution uint8, scalars cast to float64), with `meta/episode_ends` giving cumulative episode boundaries. Useful flags:
+Produces a zarr the standard diffusion-policy layout. Useful flags:
 - `--cameras wrist_cam scene_cam_front` — keep only specific cameras.
-- `--drop-failures` — skip demos with `success=False` (relevant when `generation_keep_failed=True`).
+- `--drop-failures` — skip demos with `success=False`.
 - `--dtype float32` — half the storage cost vs the default float64 if your training pipeline accepts it.
-- `--overwrite` — delete an existing output zarr first.
+- `--overwrite` — overwrite an existing output zarr (otherwise, this script will throw if the output zarr exists already).
+
+WARNING: while the instructions here encompass both the Insertion and Gear Assembly tasks, the Insertion task has not been well tested. Use at your own risk.
 
 
-Step 5 — Evaluate a trained diffusion policy:
+## Markovian Scripted Expert Data Generation Pipeline
+
+`scripts/tools/collect_demos_scripted.py` collects demonstrations automatically using a scripted finite-state machine (FSM). This FSM is Markovian in the sense that it determines its action based purely on its current observation. Only successful episodes are written to the outputted hdf5.
+
+```bash
+python scripts/tools/collect_demos_scripted.py \
+  --task Isaac-GearAssembly-Franka-IK-Rel-Mimic-v0 \
+  --dataset_file ./datasets/gear_assembly_source.hdf5 \
+  --num_envs 32 \
+  --num_demos 200 \
+  --enable_cameras \
+  --headless
+```
+
+To watch a single rollout in the GUI (drop `--headless`; `--num_envs` is forced to 1):
+
+```bash
+python scripts/tools/collect_demos_scripted.py \
+  --task Isaac-GearAssembly-Franka-IK-Rel-Mimic-v0 \
+  --dataset_file ./datasets/gear_assembly_source.hdf5 \
+  --enable_cameras
+```
+
+Key flags:
+- `--num_demos N` — target *total* successful demos in the file (`0` = run indefinitely). Existing demos in the file count toward the target.
+- `--num_envs N` — parallel envs (headless only)
+- `--n-video-trials N` — save MP4s of the first `N` attempts to `<dataset_dir>/scripted_videos/` for sanity-checking.
+
+
+## Policy Evaluation
+
+This repo contains an evaluation script for policies trained using my [diffusion-policy-experiments](https://github.com/michaelszeng/diffusion-policy-experiments) repo. It may also be adapted for other training pipelines.
+
+The following installations are required to run policies trained with [diffusion-policy-experiments](https://github.com/michaelszeng/diffusion-policy-experiments):
+```bash
+git clone git@github.com:Michaelszeng/diffusion-policy-experiments.git
+pip install -e /path/to/diffusion-policy-experiments --no-deps
+pip install dill==0.3.5.1 accelerate==0.13.2 diffusers==0.11.1 hydra-core==1.2.0 "zarr<3" "numcodecs>=0.11.0" "numba>=0.61.0" deprecated imageio==2.22.0 imageio-ffmpeg==0.4.7 "opencv-python>=4.5.0" einops==0.4.1
+pip install "transformers>=4.40,<4.45" "huggingface-hub==0.25.2"
+pip install "r3m @ https://github.com/facebookresearch/r3m/archive/b2334e726887fa0206962d7984c69c5fb09cceab.tar.gz"
+# pin to NumPy 1.x. numba ≥0.61 still supports this (numpy 1.24-2.1 range).
+pip install "numpy<2"
+```
+
+After training a policy in [diffusion-policy-experiments](https://github.com/michaelszeng/diffusion-policy-experiments), evaluate using:
+
 
 ```bash
 python scripts/eval/evaluate_model_custom.py \
   --checkpoint /path/to/checkpoint.ckpt \
   --task Isaac-GearAssembly-Franka-IK-Rel-Mimic-v0 \
-  --n-rollouts 50 \
+  --n-rollouts 500 \
   --enable_cameras
 ```
 
-Writes `results.csv`, `summary.txt`, `results.pkl`, and `videos/` to `outputs/<date>/<time>/` (or `--output-dir`). Use `--resume` with the same `--output-dir` to pick up an interrupted eval.
+This scripte writes results to `outputs/<date>/<time>/` (or `--output-dir`). Use `--resume` with the same `--output-dir` to resume an interrupted eval.
 
-
----
-
-# Isaac Lab
-
-[![IsaacSim](https://img.shields.io/badge/IsaacSim-5.1.0-silver.svg)](https://docs.isaacsim.omniverse.nvidia.com/latest/index.html)
-[![Python](https://img.shields.io/badge/python-3.11-blue.svg)](https://docs.python.org/3/whatsnew/3.11.html)
-[![Linux platform](https://img.shields.io/badge/platform-linux--64-orange.svg)](https://releases.ubuntu.com/22.04/)
-[![Windows platform](https://img.shields.io/badge/platform-windows--64-orange.svg)](https://www.microsoft.com/en-us/)
-[![pre-commit](https://img.shields.io/github/actions/workflow/status/isaac-sim/IsaacLab/pre-commit.yaml?logo=pre-commit&logoColor=white&label=pre-commit&color=brightgreen)](https://github.com/isaac-sim/IsaacLab/actions/workflows/pre-commit.yaml)
-[![docs status](https://img.shields.io/github/actions/workflow/status/isaac-sim/IsaacLab/docs.yaml?label=docs&color=brightgreen)](https://github.com/isaac-sim/IsaacLab/actions/workflows/docs.yaml)
-[![License](https://img.shields.io/badge/license-BSD--3-yellow.svg)](https://opensource.org/licenses/BSD-3-Clause)
-[![License](https://img.shields.io/badge/license-Apache--2.0-yellow.svg)](https://opensource.org/license/apache-2-0)
-
-
-**Isaac Lab** is a GPU-accelerated, open-source framework designed to unify and simplify robotics research workflows,
-such as reinforcement learning, imitation learning, and motion planning. Built on [NVIDIA Isaac Sim](https://docs.isaacsim.omniverse.nvidia.com/latest/index.html),
-it combines fast and accurate physics and sensor simulation, making it an ideal choice for sim-to-real
-transfer in robotics.
-
-Isaac Lab provides developers with a range of essential features for accurate sensor simulation, such as RTX-based
-cameras, LIDAR, or contact sensors. The framework's GPU acceleration enables users to run complex simulations and
-computations faster, which is key for iterative processes like reinforcement learning and data-intensive tasks.
-Moreover, Isaac Lab can run locally or be distributed across the cloud, offering flexibility for large-scale deployments.
-
-A detailed description of Isaac Lab can be found in our [arXiv paper](https://arxiv.org/abs/2511.04831).
-
-## Key Features
-
-Isaac Lab offers a comprehensive set of tools and environments designed to facilitate robot learning:
-
-- **Robots**: A diverse collection of robots, from manipulators, quadrupeds, to humanoids, with more than 16 commonly available models.
-- **Environments**: Ready-to-train implementations of more than 30 environments, which can be trained with popular reinforcement learning frameworks such as RSL RL, SKRL, RL Games, or Stable Baselines. We also support multi-agent reinforcement learning.
-- **Physics**: Rigid bodies, articulated systems, deformable objects
-- **Sensors**: RGB/depth/segmentation cameras, camera annotations, IMU, contact sensors, ray casters.
-
-
-## Getting Started
-
-### Documentation
-
-Our [documentation page](https://isaac-sim.github.io/IsaacLab) provides everything you need to get started, including
-detailed tutorials and step-by-step guides. Follow these links to learn more about:
-
-- [Installation steps](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html#local-installation)
-- [Reinforcement learning](https://isaac-sim.github.io/IsaacLab/main/source/overview/reinforcement-learning/rl_existing_scripts.html)
-- [Tutorials](https://isaac-sim.github.io/IsaacLab/main/source/tutorials/index.html)
-- [Available environments](https://isaac-sim.github.io/IsaacLab/main/source/overview/environments.html)
-
-
-## Isaac Sim Version Dependency
-
-Isaac Lab is built on top of Isaac Sim and requires specific versions of Isaac Sim that are compatible with each
-release of Isaac Lab. Below, we outline the recent Isaac Lab releases and GitHub branches and their corresponding
-dependency versions for Isaac Sim.
-
-| Isaac Lab Version             | Isaac Sim Version         |
-| ----------------------------- | ------------------------- |
-| `main` branch                 | Isaac Sim 4.5 / 5.0 / 5.1 |
-| `v2.3.X`                      | Isaac Sim 4.5 / 5.0 / 5.1 |
-| `v2.2.X`                      | Isaac Sim 4.5 / 5.0       |
-| `v2.1.X`                      | Isaac Sim 4.5             |
-| `v2.0.X`                      | Isaac Sim 4.5             |
-
-
-## Contributing to Isaac Lab
-
-We wholeheartedly welcome contributions from the community to make this framework mature and useful for everyone.
-These may happen as bug reports, feature requests, or code contributions. For details, please check our
-[contribution guidelines](https://isaac-sim.github.io/IsaacLab/main/source/refs/contributing.html).
-
-## Show & Tell: Share Your Inspiration
-
-We encourage you to utilize our [Show & Tell](https://github.com/isaac-sim/IsaacLab/discussions/categories/show-and-tell)
-area in the `Discussions` section of this repository. This space is designed for you to:
-
-* Share the tutorials you've created
-* Showcase your learning content
-* Present exciting projects you've developed
-
-By sharing your work, you'll inspire others and contribute to the collective knowledge
-of our community. Your contributions can spark new ideas and collaborations, fostering
-innovation in robotics and simulation.
-
-## Troubleshooting
-
-Please see the [troubleshooting](https://isaac-sim.github.io/IsaacLab/main/source/refs/troubleshooting.html) section for
-common fixes or [submit an issue](https://github.com/isaac-sim/IsaacLab/issues).
-
-For issues related to Isaac Sim, we recommend checking its [documentation](https://docs.isaacsim.omniverse.nvidia.com/latest/index.html)
-or opening a question on its [forums](https://forums.developer.nvidia.com/c/agx-autonomous-machines/isaac/67).
-
-## Support
-
-* Please use GitHub [Discussions](https://github.com/isaac-sim/IsaacLab/discussions) for discussing ideas,
-  asking questions, and requests for new features.
-* Github [Issues](https://github.com/isaac-sim/IsaacLab/issues) should only be used to track executable pieces of
-  work with a definite scope and a clear deliverable. These can be fixing bugs, documentation issues, new features,
-  or general updates.
-
-## Connect with the NVIDIA Omniverse Community
-
-Do you have a project or resource you'd like to share more widely? We'd love to hear from you!
-Reach out to the NVIDIA Omniverse Community team at OmniverseCommunity@nvidia.com to explore opportunities
-to spotlight your work.
-
-You can also join the conversation on the [Omniverse Discord](https://discord.com/invite/nvidiaomniverse) to
-connect with other developers, share your projects, and help grow a vibrant, collaborative ecosystem
-where creativity and technology intersect. Your contributions can make a meaningful impact on the Isaac Lab
-community and beyond!
-
-## License
-
-The Isaac Lab framework is released under [BSD-3 License](LICENSE). The `isaaclab_mimic` extension and its
-corresponding standalone scripts are released under [Apache 2.0](LICENSE-mimic). The license files of its
-dependencies and assets are present in the [`docs/licenses`](docs/licenses) directory.
-
-Note that Isaac Lab requires Isaac Sim, which includes components under proprietary licensing terms. Please see the [Isaac Sim license](docs/licenses/dependencies/isaacsim-license.txt) for information on Isaac Sim licensing.
-
-Note that the `isaaclab_mimic` extension requires cuRobo, which has proprietary licensing terms that can be found in [`docs/licenses/dependencies/cuRobo-license.txt`](docs/licenses/dependencies/cuRobo-license.txt).
 
 
 ## Citation
 
-If you use Isaac Lab in your research, please cite the technical report:
+If you use this repo in your research, please cite both the accompanying work: 
+
+```
+TODO
+```
+
+And the Isaac Lab technical report:
 
 ```
 @article{mittal2025isaaclab,
@@ -380,8 +240,3 @@ If you use Isaac Lab in your research, please cite the technical report:
   url={https://arxiv.org/abs/2511.04831}
 }
 ```
-
-## Acknowledgement
-
-Isaac Lab development initiated from the [Orbit](https://isaac-orbit.github.io/) framework.
-We gratefully acknowledge the authors of Orbit for their foundational contributions.
